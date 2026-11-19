@@ -20,9 +20,10 @@ pub struct Health {
     pub dead_jobs: Option<i64>,
 }
 
-/// Dependency checks for `/health`. 503 when the database or RPC is unreachable or the indexer is far behind.
+/// Dependency checks for `/health`. 503 when the database or RPC is unreachable, or (when
+/// `check_indexer_lag` is true, i.e. processes running the indexer) when the indexer is far behind.
 /// Dead jobs are reported but do not fail health (alerts cover them).
-pub async fn health_report(db: &Db, chain: &dyn ChainReader) -> Health {
+pub async fn health_report(db: &Db, chain: &dyn ChainReader, check_indexer_lag: bool) -> Health {
     let db_ok = db.ping().await.is_ok();
     let tip = chain.latest_ledger().await.ok();
     let mut lag = None;
@@ -33,7 +34,7 @@ pub async fn health_report(db: &Db, chain: &dyn ChainReader) -> Health {
         }
         dead = jobs::count_dead(&db.pool).await.ok();
     }
-    let lag_ok = lag.is_none_or(|l| l <= MAX_LAG_LEDGERS);
+    let lag_ok = !check_indexer_lag || lag.is_none_or(|l| l <= MAX_LAG_LEDGERS);
     Health { ok: db_ok && tip.is_some() && lag_ok, db: db_ok, rpc: tip.is_some(), indexer_lag_ledgers: lag, dead_jobs: dead }
 }
 

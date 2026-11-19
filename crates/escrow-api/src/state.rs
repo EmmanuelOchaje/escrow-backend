@@ -21,6 +21,8 @@ pub struct ApiConfig {
     pub explorer_tx_template: String,
     pub tokens: Tokens,
     pub network: String,
+    /// When true (process also runs the indexer), indexer lag fails `/health`.
+    pub check_indexer_lag: bool,
 }
 
 #[derive(Clone)]

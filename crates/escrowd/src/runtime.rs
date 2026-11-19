@@ -184,7 +184,7 @@ impl Runtime {
         Some(Arc::new(AiRunner(ReviewDeps {
             db: self.db.clone(),
             gh: self.gh.clone(),
-            model: Arc::new(AnthropicModel::new(key, &self.cfg.ai_model)),
+            model: Arc::new(AnthropicModel::with_timeout(key, &self.cfg.ai_model, Duration::from_secs(self.cfg.ai_timeout_secs))),
             model_name: self.cfg.ai_model.clone(),
             max_per_pr_per_day: i64::from(self.cfg.ai_max_per_pr_per_day),
             max_per_repo_per_day: i64::from(self.cfg.ai_max_per_repo_per_day),
@@ -206,7 +206,7 @@ impl Runtime {
         })
     }
 
-    pub fn api_state(&self) -> AppState {
+    pub fn api_state(&self, check_indexer_lag: bool) -> AppState {
         let c = &self.cfg;
         let login = c.github.as_ref().map(|g| {
             Arc::new(RealLogin { client_id: g.client_id.clone(), client: OAuthClient::new(&g.client_id, &g.client_secret) })
@@ -227,6 +227,7 @@ impl Runtime {
                 explorer_tx_template: c.explorer_tx_template.clone(),
                 tokens: self.tokens(),
                 network: format!("{:?}", c.network).to_lowercase(),
+                check_indexer_lag,
             }),
             chain: Arc::new(self.chain.clone()) as Arc<dyn ChainReader>,
             txb: Arc::new(self.chain.clone()) as Arc<dyn TxBuilder>,

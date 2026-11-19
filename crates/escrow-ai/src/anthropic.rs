@@ -10,6 +10,7 @@ use serde_json::json;
 use std::time::Duration;
 
 pub const DEFAULT_MODEL: &str = "claude-sonnet-5-5";
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct AnthropicModel {
     http: reqwest::Client,
@@ -20,12 +21,20 @@ pub struct AnthropicModel {
 
 impl AnthropicModel {
     pub fn new(api_key: &str, model: &str) -> Self {
-        Self::with_base(api_key, model, "https://api.anthropic.com")
+        Self::with_timeout(api_key, model, DEFAULT_TIMEOUT)
+    }
+
+    pub fn with_timeout(api_key: &str, model: &str, timeout: Duration) -> Self {
+        Self::with_base_and_timeout(api_key, model, "https://api.anthropic.com", timeout)
     }
 
     pub fn with_base(api_key: &str, model: &str, base: &str) -> Self {
+        Self::with_base_and_timeout(api_key, model, base, DEFAULT_TIMEOUT)
+    }
+
+    pub fn with_base_and_timeout(api_key: &str, model: &str, base: &str, timeout: Duration) -> Self {
         let http =
-            reqwest::Client::builder().timeout(Duration::from_secs(120)).user_agent("skillescrow-backend").build().expect("client builds");
+            reqwest::Client::builder().timeout(timeout).user_agent("skillescrow-backend").build().expect("client builds");
         Self { http, api_key: api_key.into(), model: model.into(), base: base.trim_end_matches('/').into() }
     }
 }
@@ -141,5 +150,21 @@ mod tests {
     #[test]
     fn the_key_never_appears_in_debug_output() {
         assert!(!format!("{:?}", AnthropicModel::new("sk-super-secret", "m")).contains("sk-super-secret"));
+    }
+
+    #[tokio::test]
+    async fn custom_timeout_aborts_slow_requests() {
+        async fn slow() -> Json<serde_json::Value> {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            Json(json!({}))
+        }
+        let app = Router::new().route("/v1/messages", post(slow));
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+
+        let m = AnthropicModel::with_base_and_timeout("k", "m", &url, Duration::from_millis(40));
+        let err = m.complete("s", "u").await.err().unwrap();
+        assert!(matches!(err, ModelError::Network(ref msg) if msg == "timeout"), "got {err:?}");
     }
 }

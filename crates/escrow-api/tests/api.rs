@@ -62,6 +62,10 @@ struct Env {
 }
 
 fn env(pool: PgPool, with_login: bool, admins: Vec<i64>) -> Env {
+    env_with_lag(pool, with_login, admins, true)
+}
+
+fn env_with_lag(pool: PgPool, with_login: bool, admins: Vec<i64>, check_indexer_lag: bool) -> Env {
     let db = Db::from_pool(pool);
     let chain = Arc::new(FakeChain::default());
     *chain.ledger.lock().unwrap() = 1000;
@@ -86,6 +90,7 @@ fn env(pool: PgPool, with_login: bool, admins: Vec<i64>) -> Env {
             explorer_tx_template: "https://explorer.example/tx/{hash}".into(),
             tokens: Tokens { usdc: "CUSDC".into(), xlm: "CTOKEN".into() },
             network: "testnet".into(),
+            check_indexer_lag,
         }),
         chain: chain.clone(),
         txb: txb.clone(),
@@ -176,6 +181,12 @@ async fn health_reports_ok_and_503_when_the_indexer_is_far_behind(pool: PgPool) 
     let lagging = get(&e, "/health").await;
     assert_eq!(lagging.status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(lagging.body["indexerLagLedgers"], 900);
+
+    // API-only mode (escrowd serve): indexer lag is still reported but does not fail /health
+    let serve_env = env_with_lag(pool.clone(), true, vec![], false);
+    let serve_health = get(&serve_env, "/health").await;
+    assert_eq!(serve_health.status, StatusCode::OK);
+    assert_eq!((serve_health.body["ok"].clone(), serve_health.body["indexerLagLedgers"].clone()), (json!(true), json!(900)));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -999,9 +1010,32 @@ async fn failed_payouts_can_be_listed_and_retried_but_not_when_a_transaction_exi
     payouts::mark_failed(&pool, &b.id, "later", false).await.unwrap();
 
     let listed = get_admin(&e, &admin, "/admin/payouts").await;
-    assert_eq!(listed.body.as_array().unwrap().len(), 2);
-    assert_eq!(get_admin(&e, &admin, "/admin/payouts?status=CONFIRMED").await.body.as_array().unwrap().len(), 0);
+    assert_eq!(listed.body["items"].as_array().unwrap().len(), 2);
+    assert!(listed.body["nextCursor"].is_null());
+    assert_eq!(get_admin(&e, &admin, "/admin/payouts?status=CONFIRMED").await.body["items"].as_array().unwrap().len(), 0);
     assert_eq!(get_admin(&e, &admin, "/admin/payouts?status=BOGUS").await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(get_admin(&e, &admin, "/admin/payouts?limit=0").await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(get_admin(&e, &admin, "/admin/payouts?limit=101").await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(get_admin(&e, &admin, "/admin/payouts?bountyId=nope").await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(get_admin(&e, &admin, "/admin/payouts?cursor=BAD!").await.status, StatusCode::BAD_REQUEST);
+
+    // Filter by bountyId
+    let filtered = get_admin(&e, &admin, "/admin/payouts?bountyId=4").await;
+    assert_eq!(filtered.status, StatusCode::OK);
+    let filtered_items = filtered.body["items"].as_array().unwrap();
+    assert_eq!(filtered_items.len(), 1);
+    assert_eq!(filtered_items[0]["id"], a.id);
+
+    // Keyset pagination with limit and cursor
+    let p1 = get_admin(&e, &admin, "/admin/payouts?limit=1").await;
+    assert_eq!(p1.status, StatusCode::OK);
+    assert_eq!(p1.body["items"].as_array().unwrap().len(), 1);
+    let cursor = p1.body["nextCursor"].as_str().expect("nextCursor should be present");
+    let p2 = get_admin(&e, &admin, &format!("/admin/payouts?limit=1&cursor={cursor}")).await;
+    assert_eq!(p2.status, StatusCode::OK);
+    assert_eq!(p2.body["items"].as_array().unwrap().len(), 1);
+    assert!(p2.body["nextCursor"].is_null());
+    assert_ne!(p1.body["items"][0]["id"], p2.body["items"][0]["id"]);
 
     let retry = call(&e.app, Method::POST, &format!("/admin/payouts/{}/retry", a.id), &admin.hdrs(true), None).await;
     assert_eq!(retry.status, StatusCode::OK);

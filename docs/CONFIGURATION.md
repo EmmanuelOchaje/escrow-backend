@@ -67,6 +67,7 @@ Needs the GitHub App **and** a key; otherwise reviews are off. It never affects 
 |---|---|---|
 | `ANTHROPIC_API_KEY` | none | |
 | `AI_MODEL` | `claude-sonnet-5-5` | |
+| `AI_TIMEOUT_SECS` | `120` | HTTP timeout for Anthropic requests in seconds. Must be between `1` and `179` (strictly below the 180 s worker job lease). |
 | `AI_MAX_REVIEWS_PER_PR_PER_DAY` | `5` | Cost control. |
 | `AI_MAX_REVIEWS_PER_REPO_PER_DAY` | `50` | Cost control. |
 | `REVIEW_DEBOUNCE_SECS` | `300` | Quiet period after a push before reviewing, so a burst costs one review. |

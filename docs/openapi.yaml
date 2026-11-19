@@ -368,12 +368,24 @@ paths:
   /admin/payouts:
     get:
       tags: [Admin]
-      summary: Payouts by status (default FAILED)
+      summary: Paginated payouts by status (default FAILED)
       security: [{ sessionCookie: [] }]
       parameters:
         - { name: status, in: query, schema: { $ref: '#/components/schemas/PayoutStatus' } }
+        - { name: bountyId, in: query, schema: { type: string, pattern: '^[0-9]{1,18}$' } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
       responses:
-        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Payout' } } } } }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Payout' } }
+                  nextCursor: { type: [string, 'null'] }
         '400': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
   /admin/payouts/{id}/retry:

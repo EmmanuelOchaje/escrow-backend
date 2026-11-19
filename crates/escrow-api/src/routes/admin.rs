@@ -166,22 +166,59 @@ pub async fn reject(
 }
 
 #[derive(Deserialize)]
-pub struct StatusQuery {
+#[serde(rename_all = "camelCase")]
+pub struct PayoutsQuery {
     status: Option<String>,
+    bounty_id: Option<String>,
+    cursor: Option<String>,
+    limit: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayoutsPage {
+    items: Vec<escrow_db::Payout>,
+    next_cursor: Option<String>,
+}
+
+fn digits(s: &str, max_len: usize) -> bool {
+    !s.is_empty() && s.len() <= max_len && s.bytes().all(|b| b.is_ascii_digit())
 }
 
 pub async fn list_payouts(
     State(s): State<AppState>,
     Extension(ip): Extension<ClientIp>,
     headers: HeaderMap,
-    Query(q): Query<StatusQuery>,
-) -> ApiResult<Json<Vec<escrow_db::Payout>>> {
+    q: Result<Query<PayoutsQuery>, axum::extract::rejection::QueryRejection>,
+) -> ApiResult<Json<PayoutsPage>> {
     admin(&s, &headers, &ip, false).await?;
+    let Query(q) = q.map_err(|_| ApiError::bad_request("invalid query"))?;
     let status = q.status.unwrap_or_else(|| "FAILED".into());
     if status.parse::<escrow_core::PayoutStatus>().is_err() {
         return Err(ApiError::bad_request("invalid status"));
     }
-    Ok(Json(payouts::by_status(&s.db.pool, &status, 100).await?))
+    let bounty_id = match q.bounty_id.as_deref() {
+        None => None,
+        Some(v) if digits(v, 18) => Some(v.parse::<i64>().map_err(|_| ApiError::bad_request("invalid bountyId"))?),
+        Some(_) => return Err(ApiError::bad_request("invalid bountyId")),
+    };
+    if q.cursor.as_deref().is_some_and(|c| !id_ok(c)) {
+        return Err(ApiError::bad_request("invalid cursor"));
+    }
+    let limit = match q.limit.as_deref() {
+        None => 50,
+        Some(l) => l
+            .parse::<i64>()
+            .ok()
+            .filter(|n| (1..=100).contains(n))
+            .ok_or_else(|| ApiError::bad_request("invalid limit"))?,
+    };
+    let filter = payouts::ListFilter { status, bounty_id, cursor: q.cursor, limit };
+    let mut rows = payouts::list(&s.db.pool, &filter).await?;
+    let more = rows.len() as i64 > limit;
+    rows.truncate(limit as usize);
+    let next_cursor = if more { rows.last().map(|r| r.id.clone()) } else { None };
+    Ok(Json(PayoutsPage { items: rows, next_cursor }))
 }
 
 /// Only payouts with no submitted transaction can be re-queued; one with a hash must be checked on chain first.
