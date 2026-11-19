@@ -260,16 +260,20 @@ impl ChainReader for Down {
 async fn health_is_ok_when_dependencies_answer_and_the_indexer_keeps_up(pool: PgPool) {
     let w = World::new(pool.clone());
     webhooks::save_cursor(&pool, CURSOR_ID, "c", 9_990).await.unwrap();
-    let h = health_report(&w.db, w.chain.as_ref()).await;
+    let h = health_report(&w.db, w.chain.as_ref(), true).await;
     assert!(h.ok && h.db && h.rpc);
     assert_eq!(h.indexer_lag_ledgers, Some(10));
 
     webhooks::save_cursor(&pool, CURSOR_ID, "c", 9_000).await.unwrap();
-    let lagging = health_report(&w.db, w.chain.as_ref()).await;
-    assert!(!lagging.ok, "1000 ledgers behind is not healthy");
+    let lagging = health_report(&w.db, w.chain.as_ref(), true).await;
+    assert!(!lagging.ok, "1000 ledgers behind is not healthy when running the indexer");
     assert_eq!(lagging.indexer_lag_ledgers, Some(1000));
 
-    let rpc_down = health_report(&w.db, &Down).await;
+    let api_only = health_report(&w.db, w.chain.as_ref(), false).await;
+    assert!(api_only.ok && api_only.db && api_only.rpc, "API-only instances stay healthy when indexer lags");
+    assert_eq!(api_only.indexer_lag_ledgers, Some(1000));
+
+    let rpc_down = health_report(&w.db, &Down, false).await;
     assert!(!rpc_down.ok && !rpc_down.rpc && rpc_down.db);
     let json = serde_json::to_value(&rpc_down).unwrap();
     assert_eq!(json["indexerLagLedgers"], serde_json::Value::Null);

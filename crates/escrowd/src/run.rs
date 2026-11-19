@@ -21,11 +21,11 @@ pub async fn shutdown_signal(stop: CancellationToken) {
     stop.cancel();
 }
 
-pub async fn serve(rt: &Runtime, stop: CancellationToken) -> Result<()> {
+pub async fn serve(rt: &Runtime, stop: CancellationToken, check_indexer_lag: bool) -> Result<()> {
     let addr = format!("0.0.0.0:{}", rt.cfg.port);
     let listener = tokio::net::TcpListener::bind(&addr).await.with_context(|| format!("could not listen on {addr}"))?;
     tracing::info!(%addr, network = ?rt.cfg.network, github = rt.github_configured, "API listening");
-    escrow_api::serve(listener, rt.api_state(), async move { stop.cancelled().await }).await.context("API server failed")
+    escrow_api::serve(listener, rt.api_state(check_indexer_lag), async move { stop.cancelled().await }).await.context("API server failed")
 }
 
 pub async fn worker(rt: &Runtime, stop: CancellationToken) -> Result<()> {
@@ -85,7 +85,7 @@ pub async fn reindex(rt: Runtime, from_ledger: u32) -> Result<()> {
 
 pub async fn eval(cfg: &Config) -> Result<()> {
     let key = cfg.anthropic_api_key.as_deref().context("ANTHROPIC_API_KEY is not set")?;
-    let model = AnthropicModel::new(key, &cfg.ai_model);
+    let model = AnthropicModel::with_timeout(key, &cfg.ai_model, Duration::from_secs(cfg.ai_timeout_secs));
     println!("evaluating {} against the built-in cases...\n", cfg.ai_model);
     let results = run_eval(&model).await;
     let mut failed = 0;

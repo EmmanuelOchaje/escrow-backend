@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 pub async fn health(State(s): State<AppState>) -> Response {
-    let h = health_report(&s.db, s.chain.as_ref()).await;
+    let h = health_report(&s.db, s.chain.as_ref(), s.cfg.check_indexer_lag).await;
     (if h.ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE }, Json(h)).into_response()
 }
 

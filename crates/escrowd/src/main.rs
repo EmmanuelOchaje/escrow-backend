@@ -110,10 +110,10 @@ async fn main() -> Result<()> {
             let stop = CancellationToken::new();
             tokio::spawn(run::shutdown_signal(stop.clone()));
             match cli.cmd {
-                Cmd::Serve => run::serve(&rt, stop).await,
+                Cmd::Serve => run::serve(&rt, stop, false).await,
                 Cmd::Worker => run::worker(&rt, stop).await,
                 _ => {
-                    let (a, b) = tokio::join!(run::serve(&rt, stop.clone()), run::worker(&rt, stop.clone()));
+                    let (a, b) = tokio::join!(run::serve(&rt, stop.clone(), true), run::worker(&rt, stop.clone()));
                     stop.cancel();
                     a.and(b)
                 }
@@ -124,20 +124,88 @@ async fn main() -> Result<()> {
 
 /// A dependency-free HTTP probe: the runtime image has no curl. Reads PORT from the environment like the server does.
 fn healthcheck() -> Result<()> {
+    use std::{net::SocketAddr, time::Duration};
+    let port: u16 = std::env::var("PORT")
+        .unwrap_or_else(|_| "3001".into())
+        .parse()
+        .context("invalid PORT")?;
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    healthcheck_with_timeouts(addr, Duration::from_secs(3), Duration::from_secs(3), Duration::from_secs(5))
+}
+
+fn healthcheck_with_timeouts(
+    addr: std::net::SocketAddr,
+    connect_timeout: std::time::Duration,
+    write_timeout: std::time::Duration,
+    read_timeout: std::time::Duration,
+) -> Result<()> {
     use std::{
         io::{Read, Write},
         net::TcpStream,
-        time::Duration,
     };
-    let port = std::env::var("PORT").unwrap_or_else(|_| "3001".into());
-    let mut s = TcpStream::connect(format!("127.0.0.1:{port}")).context("the API is not accepting connections")?;
-    s.set_read_timeout(Some(Duration::from_secs(5)))?;
-    s.write_all(b"GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n")?;
+    let mut s = TcpStream::connect_timeout(&addr, connect_timeout)
+        .with_context(|| format!("connect failed: could not connect to {addr}"))?;
+    s.set_write_timeout(Some(write_timeout)).context("set write timeout failed")?;
+    s.set_read_timeout(Some(read_timeout)).context("set read timeout failed")?;
+    s.write_all(b"GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n")
+        .context("write failed: could not send /health request")?;
     let mut out = String::new();
-    s.read_to_string(&mut out)?;
+    s.read_to_string(&mut out).context("read failed: could not read /health response")?;
     if out.starts_with("HTTP/1.0 200") || out.starts_with("HTTP/1.1 200") {
         Ok(())
     } else {
         anyhow::bail!("unhealthy: {}", out.lines().next().unwrap_or("no response"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        time::Duration,
+    };
+
+    #[test]
+    fn healthcheck_succeeds_on_200_and_reports_step_on_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 128];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+        });
+        healthcheck_with_timeouts(addr, Duration::from_secs(1), Duration::from_secs(1), Duration::from_secs(1)).unwrap();
+        t.join().unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 128];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 2\r\n\r\n{}");
+        });
+        let err = healthcheck_with_timeouts(addr, Duration::from_secs(1), Duration::from_secs(1), Duration::from_secs(1)).unwrap_err();
+        assert!(format!("{err:#}").contains("unhealthy"), "{err:#}");
+        t.join().unwrap();
+
+        // Refused port reports connect failure
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        let err = healthcheck_with_timeouts(closed, Duration::from_millis(200), Duration::from_secs(1), Duration::from_secs(1)).unwrap_err();
+        assert!(format!("{err:#}").contains("connect failed"), "{err:#}");
+
+        // Silent peer reports read failure
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let (_s, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(250));
+        });
+        let err = healthcheck_with_timeouts(addr, Duration::from_secs(1), Duration::from_secs(1), Duration::from_millis(50)).unwrap_err();
+        assert!(format!("{err:#}").contains("read failed"), "{err:#}");
+        t.join().unwrap();
     }
 }

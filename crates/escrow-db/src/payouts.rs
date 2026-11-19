@@ -3,7 +3,7 @@
 
 use crate::{is_unique_violation, models::Payout, new_id};
 use serde::Serialize;
-use sqlx::PgExecutor;
+use sqlx::{PgExecutor, Postgres, QueryBuilder};
 
 const COLS: &str = "id, bounty_id, pr_number, winner_github_id, winner_address, status, idempotency_key, tx_hash, attempts, last_error, created_at, updated_at";
 
@@ -146,8 +146,31 @@ pub async fn due<'e>(ex: impl PgExecutor<'e>, limit: i64) -> Result<Vec<Payout>,
     .await
 }
 
+#[derive(Debug, Clone)]
+pub struct ListFilter {
+    pub status: String,
+    pub bounty_id: Option<i64>,
+    pub cursor: Option<String>,
+    pub limit: i64,
+}
+
+/// Returns up to `limit + 1` rows ordered newest-first (`updated_at DESC, id DESC`) so the caller
+/// can tell whether another page exists.
+pub async fn list<'e>(ex: impl PgExecutor<'e>, f: &ListFilter) -> Result<Vec<Payout>, sqlx::Error> {
+    let mut q: QueryBuilder<Postgres> = QueryBuilder::new(format!("SELECT {COLS} FROM payouts WHERE status = "));
+    q.push_bind(f.status.clone());
+    if let Some(bounty_id) = f.bounty_id {
+        q.push(" AND bounty_id = ").push_bind(bounty_id);
+    }
+    if let Some(cursor) = &f.cursor {
+        q.push(" AND (updated_at, id) < (SELECT updated_at, id FROM payouts WHERE id = ").push_bind(cursor.clone()).push(")");
+    }
+    q.push(" ORDER BY updated_at DESC, id DESC LIMIT ").push_bind(f.limit + 1);
+    q.build_query_as::<Payout>().fetch_all(ex).await
+}
+
 pub async fn by_status<'e>(ex: impl PgExecutor<'e>, status: &str, limit: i64) -> Result<Vec<Payout>, sqlx::Error> {
-    sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {COLS} FROM payouts WHERE status = $1 ORDER BY updated_at DESC LIMIT $2")))
+    sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {COLS} FROM payouts WHERE status = $1 ORDER BY updated_at DESC, id DESC LIMIT $2")))
         .bind(status)
         .bind(limit)
         .fetch_all(ex)

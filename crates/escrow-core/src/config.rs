@@ -5,6 +5,9 @@
 use regex::Regex;
 use std::{collections::HashMap, fmt, str::FromStr};
 
+/// Duration of a worker job lease in seconds; AI request timeouts must stay below this.
+pub const JOB_LEASE_SECS: u64 = 180;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Network {
     Testnet,
@@ -58,6 +61,7 @@ pub struct Config {
     pub admin_github_ids: Vec<i64>,
     pub anthropic_api_key: Option<String>,
     pub ai_model: String,
+    pub ai_timeout_secs: u64,
     pub ai_max_per_pr_per_day: u32,
     pub ai_max_per_repo_per_day: u32,
     /// `basic` lets the reviewer read a few repository files beyond the diff
@@ -289,6 +293,10 @@ impl Config {
         if min_days < 1 || max_days < min_days {
             r.errors.push("MIN_DAYS/MAX_DAYS: need 1 <= min <= max".into());
         }
+        let ai_timeout_secs = r.number("AI_TIMEOUT_SECS", 120u64);
+        if ai_timeout_secs == 0 || ai_timeout_secs >= JOB_LEASE_SECS {
+            r.errors.push(format!("AI_TIMEOUT_SECS: must be between 1 and {} (below the {JOB_LEASE_SECS}s job lease)", JOB_LEASE_SECS - 1));
+        }
 
         let cfg = Config {
             log_level: r.string("LOG_LEVEL", "info"),
@@ -307,6 +315,7 @@ impl Config {
             admin_github_ids,
             anthropic_api_key,
             ai_model: r.string("AI_MODEL", "claude-sonnet-5-5"),
+            ai_timeout_secs,
             ai_max_per_pr_per_day: r.number("AI_MAX_REVIEWS_PER_PR_PER_DAY", 5u32),
             ai_max_per_repo_per_day: r.number("AI_MAX_REVIEWS_PER_REPO_PER_DAY", 50u32),
             ai_repo_context,
@@ -446,6 +455,16 @@ mod tests {
         assert!(Config::from_map(&with(&[("STELLAR_NETWORK", "devnet")])).is_err());
         assert!(Config::from_map(&with(&[("ADMIN_GITHUB_IDS", "1,x")])).is_err());
         assert!(Config::from_map(&with(&[("TOKEN_MIN_AMOUNT", "10"), ("TOKEN_MAX_AMOUNT", "5")])).is_err());
+        assert!(Config::from_map(&with(&[("AI_TIMEOUT_SECS", "0")])).is_err());
+        assert!(Config::from_map(&with(&[("AI_TIMEOUT_SECS", "180")])).is_err());
+        assert!(Config::from_map(&with(&[("AI_TIMEOUT_SECS", "240")])).is_err());
+    }
+
+    #[test]
+    fn ai_timeout_defaults_to_120_and_accepts_values_below_lease() {
+        assert_eq!(Config::from_map(&base()).unwrap().ai_timeout_secs, 120);
+        assert_eq!(Config::from_map(&with(&[("AI_TIMEOUT_SECS", "45")])).unwrap().ai_timeout_secs, 45);
+        assert_eq!(Config::from_map(&with(&[("AI_TIMEOUT_SECS", "179")])).unwrap().ai_timeout_secs, 179);
     }
 
     #[test]
