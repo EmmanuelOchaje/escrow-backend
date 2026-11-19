@@ -78,3 +78,22 @@ pub async fn get_repo<'e>(ex: impl PgExecutor<'e>, id: i64) -> Result<Option<Rep
 pub async fn list_repos<'e>(ex: impl PgExecutor<'e>) -> Result<Vec<Repo>, sqlx::Error> {
     sqlx::query_as("SELECT id, installation_id, full_name, is_private FROM repos ORDER BY full_name").fetch_all(ex).await
 }
+
+/// Whether AI reviews are on for a repository (on unless a `repo_settings` row turns them off).
+pub async fn ai_reviews_enabled<'e>(ex: impl PgExecutor<'e>, repo_id: i64) -> Result<bool, sqlx::Error> {
+    let v: Option<bool> = sqlx::query_scalar("SELECT ai_reviews FROM repo_settings WHERE repo_id = $1").bind(repo_id).fetch_optional(ex).await?;
+    Ok(v.unwrap_or(true))
+}
+
+/// Turns AI reviews on or off for a repository.
+pub async fn set_ai_reviews<'e>(ex: impl PgExecutor<'e>, repo_id: i64, enabled: bool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO repo_settings (repo_id, ai_reviews) VALUES ($1, $2)
+         ON CONFLICT (repo_id) DO UPDATE SET ai_reviews = EXCLUDED.ai_reviews",
+    )
+    .bind(repo_id)
+    .bind(enabled)
+    .execute(ex)
+    .await?;
+    Ok(())
+}

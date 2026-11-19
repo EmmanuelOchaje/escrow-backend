@@ -19,7 +19,7 @@ use axum::{
 };
 use chrono::Duration;
 use escrow_chain::keys;
-use escrow_db::{Dispute, audit, disputes, jobs, payouts, webhooks};
+use escrow_db::{Dispute, audit, disputes, github, jobs, payouts, webhooks};
 use escrow_engine::indexer::CURSOR_ID;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -204,6 +204,28 @@ pub async fn retry_payout(
     }
     audit_log(&s, &a, "payout.retry", format!("payout:{}", p.id), json!({})).await?;
     Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct AiReviewsBody {
+    enabled: bool,
+}
+
+/// Turns AI reviews (automatic and `/bounty review`) on or off for one tracked repository.
+pub async fn set_ai_reviews(
+    State(s): State<AppState>,
+    Extension(ip): Extension<ClientIp>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    ApiJson(b): ApiJson<AiReviewsBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let a = admin(&s, &headers, &ip, true).await?;
+    if github::get_repo(&s.db.pool, id).await?.is_none() {
+        return Err(ApiError::not_found("repo"));
+    }
+    github::set_ai_reviews(&s.db.pool, id, b.enabled).await?;
+    audit_log(&s, &a, "repo.ai_reviews", format!("repo:{id}"), json!({ "enabled": b.enabled })).await?;
+    Ok(Json(json!({ "ok": true, "aiReviews": b.enabled })))
 }
 
 pub async fn status(

@@ -2,7 +2,7 @@
 
 use crate::ports::ReviewScheduler;
 use escrow_core::refs::parse_closing_refs;
-use escrow_db::{Db, bounties, prs};
+use escrow_db::{Db, bounties, github, prs};
 use escrow_github::payloads::PullRequestEvent;
 use escrow_payouts::{PayoutDeps, on_merge};
 use std::{sync::Arc, time::Duration};
@@ -70,6 +70,7 @@ pub async fn handle_pull_request(d: &PullDeps, ev: &PullRequestEvent) -> Result<
         && !pr.draft
         && REVIEW_ACTIONS.contains(&ev.action.as_str())
         && let Some(r) = &d.reviews
+        && github::ai_reviews_enabled(&d.db.pool, ev.repository.id).await?
     {
         // best effort: a scheduling hiccup must not fail the webhook
         if let Err(e) = r.schedule(pr.id, d.review_delay, false).await {

@@ -3,7 +3,7 @@ mod common;
 use chrono::{Duration, Utc};
 use common::*;
 use escrow_core::BountyStatus;
-use escrow_db::{MIGRATOR, audit, bounties, disputes, intents, payouts, prs, users};
+use escrow_db::{MIGRATOR, audit, bounties, disputes, github, intents, payouts, prs, users};
 use escrow_engine::{EngineError, dispatch::dispatch_webhook};
 use escrow_github::GithubError;
 use escrow_testkit::seed;
@@ -335,6 +335,25 @@ async fn reviews_are_scheduled_after_a_quiet_period_for_open_non_draft_prs_only(
     send(pr_event("labeled", 7, 100, 900, "Closes #3", false, false, "open")).await.unwrap(); // not a content change
     let got = sched.0.lock().unwrap().clone();
     assert_eq!(got, [(100, std::time::Duration::from_secs(300), false), (100, std::time::Duration::from_secs(300), false)]);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn no_review_is_scheduled_for_a_repository_that_opted_out(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    fund_bounty(&w, 4, 3).await;
+    github::set_ai_reviews(&pool, seed::REPO_ID, false).await.unwrap();
+    let sched = Arc::new(Scheduler::default());
+    let d = w.dispatch(Some(sched.clone()));
+
+    let opened = pr_event("opened", 7, 100, 900, "Closes #3", false, false, "open");
+    assert_eq!(dispatch_webhook(&d, "pull_request", &opened).await.unwrap(), "pull_request:1", "the PR is still tracked");
+    let ok = comment_event("/bounty review", 500, "alice", "User", 7, "open", true);
+    assert_eq!(dispatch_webhook(&d, "issue_comment", &ok).await.unwrap(), "ignored:repo-opted-out");
+    assert!(sched.0.lock().unwrap().is_empty(), "no review job for an opted-out repo");
+    assert!(w.gh.bodies().last().unwrap().contains("AI reviews are turned off"));
+
+    github::set_ai_reviews(&pool, seed::REPO_ID, true).await.unwrap();
+    assert_eq!(dispatch_webhook(&d, "issue_comment", &ok).await.unwrap(), "review-requested");
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

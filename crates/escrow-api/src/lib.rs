@@ -21,7 +21,7 @@ use axum::{
     http::{HeaderName, HeaderValue, Method, header},
     middleware::{Next, from_fn_with_state},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use error::ApiError;
 use extract::ClientIp;
@@ -102,6 +102,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/payouts", get(admin::list_payouts))
         .route("/admin/payouts/{id}/retry", post(admin::retry_payout))
         .route("/admin/status", get(admin::status))
+        .route("/admin/repos/{id}/ai-reviews", put(admin::set_ai_reviews))
         .route("/github/webhooks", post(webhook::receive).layer(DefaultBodyLimit::max(WEBHOOK_BODY_LIMIT)))
         .fallback(|| async { ApiError::not_found("route") })
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
