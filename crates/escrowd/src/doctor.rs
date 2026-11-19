@@ -119,7 +119,11 @@ pub async fn run(cfg: Config) -> Result<()> {
                     Err(e) => r.add(S::Fail, "github app", format!("{e}. Check GITHUB_APP_ID and the private key.")),
                 }
             } else {
-                r.add(S::Warn, "github app", "not configured: no webhooks, comments or sign-in. See docs/GITHUB_APP.md.");
+                let waiting = match escrow_engine::jobs::count_waiting_for_github(&rt.db.pool).await {
+                    Ok(n) => format!("; {n} job(s) waiting for it"),
+                    Err(_) => String::new(),
+                };
+                r.add(S::Warn, "github app", format!("not configured: no webhooks, comments or sign-in{waiting}. See docs/GITHUB_APP.md."));
             }
         }
     }

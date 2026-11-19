@@ -17,17 +17,25 @@ const PASS: &str = "Test SDF Network ; September 2015";
 
 type Log = Arc<Mutex<Vec<(String, Value)>>>;
 type Responder = Arc<dyn Fn(&str, &Value) -> Value + Send + Sync>;
+type Agents = Arc<Mutex<Vec<String>>>;
 
 struct Fake {
     url: String,
     log: Log,
+    agents: Agents,
 }
 
 impl Fake {
     async fn start(responder: impl Fn(&str, &Value) -> Value + Send + Sync + 'static) -> Fake {
         let log: Log = Arc::default();
-        let state = (log.clone(), Arc::new(responder) as Responder);
-        async fn handle(State((log, r)): State<(Log, Responder)>, Json(req): Json<Value>) -> Json<Value> {
+        let agents: Agents = Arc::default();
+        let state = (log.clone(), Arc::new(responder) as Responder, agents.clone());
+        async fn handle(
+            State((log, r, agents)): State<(Log, Responder, Agents)>,
+            headers: axum::http::HeaderMap,
+            Json(req): Json<Value>,
+        ) -> Json<Value> {
+            agents.lock().unwrap().push(headers.get("user-agent").and_then(|v| v.to_str().ok()).unwrap_or("").to_string());
             let method = req["method"].as_str().unwrap_or("").to_string();
             let params = req["params"].clone();
             let out = r(&method, &params);
@@ -41,7 +49,7 @@ impl Fake {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        Fake { url, log }
+        Fake { url, log, agents }
     }
 
     fn chain(&self) -> SorobanChain {
@@ -125,6 +133,13 @@ fn invoked(e: &TransactionV1Envelope) -> &InvokeContractArgs {
         OperationBody::InvokeHostFunction(InvokeHostFunctionOp { host_function: HostFunction::InvokeContract(c), .. }) => c,
         _ => panic!("not a contract call"),
     }
+}
+
+#[tokio::test]
+async fn requests_carry_the_versioned_user_agent() {
+    let fake = Fake::start(|_, _| json!({ "sequence": 100 })).await;
+    let _ = fake.chain().latest_ledger().await;
+    assert_eq!(fake.agents.lock().unwrap().first().map(String::as_str), Some(escrow_core::USER_AGENT));
 }
 
 #[tokio::test]

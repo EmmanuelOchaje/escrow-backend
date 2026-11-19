@@ -19,3 +19,6 @@ pub mod status;
 
 pub use amounts::{AmountError, TOKEN_DECIMALS, from_base_units, to_base_units};
 pub use status::{BountyStatus, DisputeStatus, PayoutStatus};
+
+/// Sent by every outbound HTTP client, so a provider can tell which release made a request.
+pub const USER_AGENT: &str = concat!("skillescrow-backend/", env!("CARGO_PKG_VERSION"));

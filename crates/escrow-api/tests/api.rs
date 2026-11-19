@@ -1028,6 +1028,16 @@ async fn the_admin_status_summarises_the_system(pool: PgPool) {
         (r.body["indexerLedger"].as_i64(), r.body["openDisputes"].as_i64(), r.body["failedPayouts"].as_i64(), r.body["deadJobs"].as_i64()),
         (Some(987), Some(1), Some(0), Some(0))
     );
+    assert_eq!(r.body["waitingForGithub"].as_i64(), Some(0));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn the_admin_status_counts_jobs_waiting_for_the_github_app(pool: PgPool) {
+    let e = env(pool.clone(), false, vec![]);
+    let admin = signed_in(&e, 1, "arb", None, true).await;
+    escrow_engine::jobs::enqueue_card_refresh(&pool, 4).await.unwrap();
+    let r = get_admin(&e, &admin, "/admin/status").await;
+    assert_eq!(r.body["waitingForGithub"].as_i64(), Some(1));
 }
 
 // ================= webhooks =================
