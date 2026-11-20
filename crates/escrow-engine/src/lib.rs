@@ -18,7 +18,11 @@ pub mod jobs;
 pub mod ops;
 pub mod ports;
 pub mod pulls;
+pub mod reconcile;
+pub mod solvency;
 pub mod sync;
 pub mod worker;
 
 pub use error::EngineError;
+pub use reconcile::{detect_event_gap, reconcile_bounties};
+pub use solvency::{check_token_solvency, SolvencyCheck, SolvencySeverity};

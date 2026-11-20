@@ -67,6 +67,16 @@ RELAYER_SECRET=S… LIVE_BOUNTY=4 LIVE_WINNER=G… cargo test -p escrow-chain --
 
 **Add a fake behaviour for a test.** `escrow-testkit` holds the shared in-memory `FakeGithub`, `FakeChain`, `FakeEvents` and `FakeTxBuilder`. It is a dev-dependency only (a test enforces that).
 
+**Add a prompt injection test case.** The offline injection corpus is in `crates/escrow-ai/tests/injection.rs`. To add a case:
+1. Add a new entry to the `cases` vec with format: `("case_descriptive_name", payload, "Human description")`.
+2. The payload is any string that might bypass the `defang()` function or fence structure.
+3. The test automatically verifies that:
+   - Fences remain balanced (exactly one open and one close of each fence type)
+   - Payload size stays within limits
+   - Defang removes all fence-like patterns
+4. Examples of injection techniques tested: fence-closing variants (case/whitespace), zero-width characters, homoglyphs, encoding (base64/rot13), very long inputs, schema imitation, nested structures, unicode normalization. At least 40 cases must exist and pass for CI to succeed.
+5. Run `cargo test -p escrow-ai injection` to verify.
+
 ## Conventions
 
 - `cargo fmt` (config in `rustfmt.toml`), clippy clean with `-D warnings`, no `unsafe`.

@@ -66,6 +66,14 @@ pub struct Config {
     pub ai_max_per_repo_per_day: u32,
     /// `basic` lets the reviewer read a few repository files beyond the diff
     pub ai_repo_context: bool,
+    /// Price in USD per million input tokens
+    pub ai_price_input_per_mtok: f64,
+    /// Price in USD per million output tokens
+    pub ai_price_output_per_mtok: f64,
+    /// Daily spend limit in USD
+    pub ai_daily_budget_usd: Option<f64>,
+    /// Monthly spend limit in USD
+    pub ai_monthly_budget_usd: Option<f64>,
     pub explorer_tx_template: String,
     pub relayer_secret: Option<String>,
     /// extra channel accounts that source relayer releases (empty = the relayer is its own source)
@@ -298,6 +306,12 @@ impl Config {
             r.errors.push(format!("AI_TIMEOUT_SECS: must be between 1 and {} (below the {JOB_LEASE_SECS}s job lease)", JOB_LEASE_SECS - 1));
         }
 
+        let ai_price_input = r.number("AI_PRICE_INPUT_PER_MTOK", 3.0f64);
+        let ai_price_output = r.number("AI_PRICE_OUTPUT_PER_MTOK", 15.0f64);
+        if ai_price_input <= 0.0 || ai_price_output <= 0.0 {
+            r.errors.push("AI_PRICE_INPUT_PER_MTOK and AI_PRICE_OUTPUT_PER_MTOK: must be positive".into());
+        }
+
         let cfg = Config {
             log_level: r.string("LOG_LEVEL", "info"),
             port: r.number("PORT", 3001u16),
@@ -319,6 +333,10 @@ impl Config {
             ai_max_per_pr_per_day: r.number("AI_MAX_REVIEWS_PER_PR_PER_DAY", 5u32),
             ai_max_per_repo_per_day: r.number("AI_MAX_REVIEWS_PER_REPO_PER_DAY", 50u32),
             ai_repo_context,
+            ai_price_input_per_mtok: ai_price_input,
+            ai_price_output_per_mtok: ai_price_output,
+            ai_daily_budget_usd: r.optional("AI_DAILY_BUDGET_USD").and_then(|v| v.parse::<f64>().ok()),
+            ai_monthly_budget_usd: r.optional("AI_MONTHLY_BUDGET_USD").and_then(|v| v.parse::<f64>().ok()),
             explorer_tx_template: r.string("EXPLORER_TX_URL_TEMPLATE", default_explorer),
             relayer_secret,
             relayer_channel_secrets,
@@ -481,5 +499,35 @@ mod tests {
         assert!(c.secure_cookies());
         assert_eq!(c.api_public_url, "https://api.example");
         assert_eq!(c.explorer_tx("abc"), "https://stellar.expert/explorer/testnet/tx/abc");
+    }
+
+    #[test]
+    fn ai_pricing_and_budget_defaults() {
+        let c = Config::from_map(&base()).unwrap();
+        assert_eq!(c.ai_price_input_per_mtok, 3.0);
+        assert_eq!(c.ai_price_output_per_mtok, 15.0);
+        assert_eq!(c.ai_daily_budget_usd, None);
+        assert_eq!(c.ai_monthly_budget_usd, None);
+    }
+
+    #[test]
+    fn ai_pricing_and_budget_custom() {
+        let c = Config::from_map(&with(&[
+            ("AI_PRICE_INPUT_PER_MTOK", "2.5"),
+            ("AI_PRICE_OUTPUT_PER_MTOK", "12.5"),
+            ("AI_DAILY_BUDGET_USD", "50"),
+            ("AI_MONTHLY_BUDGET_USD", "1000"),
+        ]))
+        .unwrap();
+        assert_eq!(c.ai_price_input_per_mtok, 2.5);
+        assert_eq!(c.ai_price_output_per_mtok, 12.5);
+        assert_eq!(c.ai_daily_budget_usd, Some(50.0));
+        assert_eq!(c.ai_monthly_budget_usd, Some(1000.0));
+    }
+
+    #[test]
+    fn ai_pricing_must_be_positive() {
+        let e = Config::from_map(&with(&[("AI_PRICE_INPUT_PER_MTOK", "0")])).unwrap_err().to_string();
+        assert!(e.contains("must be positive"));
     }
 }
