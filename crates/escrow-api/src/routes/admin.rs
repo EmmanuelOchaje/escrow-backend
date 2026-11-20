@@ -279,5 +279,7 @@ pub async fn status(
         "openDisputes": disputes::count_open(&s.db.pool).await?,
         "deadJobs": jobs::count_dead(&s.db.pool).await?,
         "pendingJobs": jobs::count_pending(&s.db.pool).await?,
+        // sign-in exists only with the GitHub App; without it, GitHub jobs are not claimed and wait here
+        "waitingForGithub": if s.login.is_some() { 0 } else { escrow_engine::jobs::count_waiting_for_github(&s.db.pool).await? },
     })))
 }

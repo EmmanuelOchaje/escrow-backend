@@ -26,8 +26,8 @@ use escrow_github::{
 use escrow_payouts::PayoutDeps;
 use std::{sync::Arc, time::Duration};
 
-/// Stands in for GitHub when the App is not configured: every call fails with a retryable error that
-/// says so, so jobs wait for the configuration instead of silently doing nothing.
+/// Stands in for GitHub when the App is not configured: every call fails with `NotConfigured`. The worker
+/// does not claim GitHub jobs in this state, so they stay queued until the App is configured.
 struct NoGithub;
 
 #[async_trait]
@@ -201,6 +201,7 @@ impl Runtime {
             chain: Arc::new(self.chain.clone()),
             relayer: self.relayer.clone().map(|r| r as Arc<dyn ReleaseSigner>),
             alerts: Arc::new(AlertSender::new(self.cfg.alert_webhook_url.clone(), Duration::from_secs(3600))),
+            github_configured: self.github_configured,
             min_relayer_xlm: self.cfg.relayer_min_xlm_alert,
             grace: Chrono::hours(72),
         })

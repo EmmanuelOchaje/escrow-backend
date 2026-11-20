@@ -28,6 +28,8 @@ pub struct WorkerDeps {
     pub chain: Arc<dyn ChainReader>,
     pub relayer: Option<Arc<dyn ReleaseSigner>>,
     pub alerts: Arc<AlertSender>,
+    /// False when the GitHub App is not configured: GitHub jobs then stay queued instead of retrying until they die.
+    pub github_configured: bool,
     pub min_relayer_xlm: f64,
     pub grace: ChronoDuration,
 }
@@ -84,6 +86,14 @@ pub async fn run_queue(w: Arc<WorkerDeps>, stop: CancellationToken, concurrency:
     let mut kinds_to_run: Vec<&str> = vec![kinds::WEBHOOK, kinds::CARD_REFRESH, kinds::PAYOUT_ANNOUNCE];
     if w.reviews.is_some() {
         kinds_to_run.push(kinds::REVIEW);
+    }
+    if !w.github_configured {
+        kinds_to_run.retain(|k| !kinds::GITHUB_KINDS.contains(k));
+        tracing::warn!("GitHub App is not configured: jobs that need it stay queued until it is");
+    }
+    if kinds_to_run.is_empty() {
+        stop.cancelled().await;
+        return;
     }
     let mut tasks = tokio::task::JoinSet::new();
     for n in 0..concurrency.max(1) {

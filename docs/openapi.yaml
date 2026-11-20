@@ -448,6 +448,7 @@ paths:
                   openDisputes: { type: integer }
                   deadJobs: { type: integer }
                   pendingJobs: { type: integer }
+                  waitingForGithub: { type: integer }
         '403': { $ref: '#/components/responses/Error' }
   /github/webhooks:
     post:

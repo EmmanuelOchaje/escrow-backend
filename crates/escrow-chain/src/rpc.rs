@@ -27,7 +27,7 @@ struct RpcFault {
 
 impl RpcClient {
     pub fn new(url: &str, timeout: Duration) -> Result<Self, ChainError> {
-        let http = reqwest::Client::builder().timeout(timeout).user_agent("skillescrow-backend").build().map_err(ChainError::from)?;
+        let http = reqwest::Client::builder().timeout(timeout).user_agent(escrow_core::USER_AGENT).build().map_err(ChainError::from)?;
         Ok(Self { http, url: url.to_string() })
     }
 

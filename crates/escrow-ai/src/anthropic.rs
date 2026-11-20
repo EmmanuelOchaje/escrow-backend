@@ -29,6 +29,11 @@ impl AnthropicModel {
     }
 
     pub fn with_base(api_key: &str, model: &str, base: &str) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .user_agent(escrow_core::USER_AGENT)
+            .build()
+            .expect("client builds");
         Self::with_base_and_timeout(api_key, model, base, DEFAULT_TIMEOUT)
     }
 
@@ -127,6 +132,7 @@ mod tests {
         let (headers, body) = seen.lock().unwrap()[0].clone();
         assert_eq!(headers["x-api-key"], "sk-test-key-123");
         assert_eq!(headers["anthropic-version"], "2023-06-01");
+        assert_eq!(headers["user-agent"], escrow_core::USER_AGENT);
         assert_eq!(body["model"], "claude-test");
         assert_eq!(body["system"], "SYS");
         assert_eq!(body["messages"][0]["content"], "USER");

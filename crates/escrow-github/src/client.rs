@@ -158,7 +158,7 @@ impl GithubClient {
         let pem = cfg.private_key.replace("\\n", "\n");
         let key = EncodingKey::from_rsa_pem(pem.as_bytes())
             .map_err(|_| GithubError::Invalid("GITHUB_APP_PRIVATE_KEY is not a valid RSA PEM key".into()))?;
-        let http = reqwest::Client::builder().timeout(cfg.timeout).user_agent("skillescrow-backend").build()?;
+        let http = reqwest::Client::builder().timeout(cfg.timeout).user_agent(escrow_core::USER_AGENT).build()?;
         Ok(Self {
             http,
             api: cfg.api_url.trim_end_matches('/').to_string(),

@@ -46,6 +46,7 @@ struct Seen {
     method: String,
     path: String,
     auth: String,
+    ua: String,
     body: Value,
 }
 
@@ -81,6 +82,7 @@ impl Fake {
                 method: method.to_string(),
                 path: uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_default(),
                 auth: headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("").to_string(),
+                ua: headers.get("user-agent").and_then(|v| v.to_str().ok()).unwrap_or("").to_string(),
                 body: serde_json::from_slice(&body).unwrap_or(Value::Null),
             };
             let (code, extra_headers, out) = h(&seen, &base);
@@ -186,6 +188,53 @@ async fn a_token_close_to_expiry_is_replaced() {
     c.get_issue(7, "acme/widgets", 3).await.unwrap();
     c.get_issue(7, "acme/widgets", 3).await.unwrap();
     assert_eq!(*n.lock().unwrap(), 2);
+}
+
+#[tokio::test]
+async fn the_clock_decides_when_a_cached_token_is_refreshed() {
+    let clock = Arc::new(Mutex::new(Utc::now()));
+    let (server_clock, client_clock) = (clock.clone(), clock.clone());
+    let n = Arc::new(Mutex::new(0));
+    let fake = Fake::start(move |s| {
+        if s.path.ends_with("/access_tokens") {
+            let mut n = n.lock().unwrap();
+            *n += 1;
+            return token_reply(&format!("tok-{n}"), *server_clock.lock().unwrap() + Duration::hours(1));
+        }
+        (200, json!({ "number": 3, "title": "t", "state": "open", "html_url": "u", "body": null }))
+    })
+    .await;
+    let c = fake.client().with_clock(move || *client_clock.lock().unwrap());
+    let t0 = *clock.lock().unwrap();
+    let mints = || fake.seen().iter().filter(|s| s.path.ends_with("/access_tokens")).count();
+    let last_auth = || fake.seen().last().unwrap().auth.clone();
+
+    c.get_issue(7, "acme/widgets", 3).await.unwrap();
+    assert_eq!((mints(), last_auth()), (1, "Bearer tok-1".to_string()));
+
+    // one second before the 60 s refresh margin: the cached token is reused
+    *clock.lock().unwrap() = t0 + Duration::seconds(3600 - 61);
+    c.get_issue(7, "acme/widgets", 3).await.unwrap();
+    assert_eq!((mints(), last_auth()), (1, "Bearer tok-1".to_string()));
+
+    // another installation gets its own token
+    c.get_issue(8, "acme/widgets", 3).await.unwrap();
+    assert_eq!((mints(), last_auth()), (2, "Bearer tok-2".to_string()));
+
+    // inside the margin: installation 7 gets a new token, installation 8 keeps its own
+    *clock.lock().unwrap() = t0 + Duration::seconds(3600 - 59);
+    c.get_issue(7, "acme/widgets", 3).await.unwrap();
+    assert_eq!((mints(), last_auth()), (3, "Bearer tok-3".to_string()));
+    c.get_issue(8, "acme/widgets", 3).await.unwrap();
+    assert_eq!((mints(), last_auth()), (3, "Bearer tok-2".to_string()));
+}
+
+#[tokio::test]
+async fn requests_carry_the_versioned_user_agent() {
+    let fake = Fake::start(simple(json!([]))).await;
+    fake.client().list_installations().await.unwrap();
+    assert_eq!(fake.seen()[0].ua, escrow_core::USER_AGENT);
+    assert_eq!(escrow_core::USER_AGENT, format!("skillescrow-backend/{}", env!("CARGO_PKG_VERSION")));
 }
 
 #[tokio::test]
