@@ -13,6 +13,31 @@ scripts/test.sh          # fmt --check, clippy -D warnings, all tests, cargo aud
 
 `#[sqlx::test]` creates and drops a throwaway database per test, so the tests run in parallel and never read or modify the database `DATABASE_URL` points at. Nothing needs a network except the three opt-in live tests.
 
+## TypeScript backend tests
+
+The original TypeScript backend (`src/`, `test/`, `package.json`) runs in CI alongside the Rust backend:
+
+```bash
+npm ci                           # install dependencies
+npm run test                     # run vitest suite
+npm run typecheck                # TypeScript type checking
+```
+
+The TypeScript backend continues to support the Vercel deployment. While the Rust backend is the primary implementation, the TypeScript tests ensure the reference implementation remains working.
+
+## Test coverage (Rust)
+
+To generate a coverage report locally:
+
+```bash
+cargo install cargo-llvm-cov
+export DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
+cargo llvm-cov --workspace --html
+open target/llvm-cov/html/index.html
+```
+
+The coverage report shows which branches in the payout and indexer paths are exercised by tests. Coverage is also reported in CI and uploaded as an artifact on each push.
+
 ## Running locally
 
 ```bash
@@ -66,6 +91,16 @@ RELAYER_SECRET=S… LIVE_BOUNTY=4 LIVE_WINNER=G… cargo test -p escrow-chain --
 **Add a GitHub command.** Extend `escrow-core::command` (pure parser, with tests), then handle it in `escrow-engine/src/commands.rs`. Remember: first line of the comment only.
 
 **Add a fake behaviour for a test.** `escrow-testkit` holds the shared in-memory `FakeGithub`, `FakeChain`, `FakeEvents` and `FakeTxBuilder`. It is a dev-dependency only (a test enforces that).
+
+**Add a prompt injection test case.** The offline injection corpus is in `crates/escrow-ai/tests/injection.rs`. To add a case:
+1. Add a new entry to the `cases` vec with format: `("case_descriptive_name", payload, "Human description")`.
+2. The payload is any string that might bypass the `defang()` function or fence structure.
+3. The test automatically verifies that:
+   - Fences remain balanced (exactly one open and one close of each fence type)
+   - Payload size stays within limits
+   - Defang removes all fence-like patterns
+4. Examples of injection techniques tested: fence-closing variants (case/whitespace), zero-width characters, homoglyphs, encoding (base64/rot13), very long inputs, schema imitation, nested structures, unicode normalization. At least 40 cases must exist and pass for CI to succeed.
+5. Run `cargo test -p escrow-ai injection` to verify.
 
 ## Conventions
 

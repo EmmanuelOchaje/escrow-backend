@@ -1,6 +1,6 @@
 //! Transaction construction, assembly after simulation, signing, and inspection of what users submit.
 
-use crate::{error::ChainError, keys, rpc::SimulationOk};
+use crate::{error::ChainError, keys, rpc::SimulationOk, signer::SignatureProvider};
 use sha2::{Digest, Sha256};
 use stellar_xdr::{
     DecoratedSignature, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, Limits, Memo, MuxedAccount, Operation, OperationBody,
@@ -117,6 +117,25 @@ pub fn sign(tx: Transaction, network_id: [u8; 32], signer: &keys::Signer) -> Res
     if let TransactionEnvelope::Tx(e) = &mut env {
         e.signatures = vec![DecoratedSignature {
             hint: SignatureHint(signer.hint()),
+            signature: Signature(sig.to_vec().try_into().map_err(|_| ChainError::Invalid("signature length".into()))?),
+        }]
+        .try_into()
+        .map_err(|_| ChainError::Invalid("signatures".into()))?;
+    }
+    Ok((env, hash))
+}
+
+/// Signs with any [`SignatureProvider`], a local key or a remote one such as Vault Transit, so the relayer never
+/// needs the secret. The decorated signature's hint is the last four bytes of the provider's public key.
+pub async fn sign_with(tx: Transaction, network_id: [u8; 32], provider: &dyn SignatureProvider) -> Result<(TransactionEnvelope, [u8; 32]), ChainError> {
+    let mut env = envelope(tx);
+    let hash = tx_hash(&env, network_id)?;
+    let public = provider.public_key().await?;
+    let sig = provider.sign(hash).await?;
+    let hint: [u8; 4] = public[28..32].try_into().map_err(|_| ChainError::Invalid("public key length".into()))?;
+    if let TransactionEnvelope::Tx(e) = &mut env {
+        e.signatures = vec![DecoratedSignature {
+            hint: SignatureHint(hint),
             signature: Signature(sig.to_vec().try_into().map_err(|_| ChainError::Invalid("signature length".into()))?),
         }]
         .try_into()

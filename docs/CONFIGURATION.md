@@ -70,6 +70,10 @@ Needs the GitHub App **and** a key; otherwise reviews are off. It never affects 
 | `AI_TIMEOUT_SECS` | `120` | HTTP timeout for Anthropic requests in seconds. Must be between `1` and `179` (strictly below the 180 s worker job lease). |
 | `AI_MAX_REVIEWS_PER_PR_PER_DAY` | `5` | Cost control. |
 | `AI_MAX_REVIEWS_PER_REPO_PER_DAY` | `50` | Cost control. |
+| `AI_PRICE_INPUT_PER_MTOK` | `3.0` | Cost in USD per million input tokens. Used to compute spend per review and enforce budgets. |
+| `AI_PRICE_OUTPUT_PER_MTOK` | `15.0` | Cost in USD per million output tokens. Used to compute spend per review and enforce budgets. |
+| `AI_DAILY_BUDGET_USD` | none | Optional daily spend limit in USD. When reached, reviews are skipped for the rest of the day and a comment is posted once per PR. |
+| `AI_MONTHLY_BUDGET_USD` | none | Optional monthly spend limit in USD. Tracked alongside daily limit. |
 | `REVIEW_DEBOUNCE_SECS` | `300` | Quiet period after a push before reviewing, so a burst costs one review. |
 
 ## Worker

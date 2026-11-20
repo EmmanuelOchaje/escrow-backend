@@ -66,6 +66,14 @@ pub struct Config {
     pub ai_max_per_repo_per_day: u32,
     /// `basic` lets the reviewer read a few repository files beyond the diff
     pub ai_repo_context: bool,
+    /// Price in USD per million input tokens
+    pub ai_price_input_per_mtok: f64,
+    /// Price in USD per million output tokens
+    pub ai_price_output_per_mtok: f64,
+    /// Daily spend limit in USD
+    pub ai_daily_budget_usd: Option<f64>,
+    /// Monthly spend limit in USD
+    pub ai_monthly_budget_usd: Option<f64>,
     pub explorer_tx_template: String,
     pub relayer_secret: Option<String>,
     /// extra channel accounts that source relayer releases (empty = the relayer is its own source)
@@ -89,6 +97,14 @@ pub struct Config {
     pub indexer_start_ledger: Option<u32>,
     pub db_max_connections: u32,
     pub worker_concurrency: usize,
+    /// `RATE_LIMIT_STORE=postgres`: request budgets are counted in Postgres and shared by every API instance
+    pub shared_rate_limits: bool,
+    /// `local` (default) or `vault`: where the relayer's Ed25519 signatures come from
+    pub relayer_signer: String,
+    pub vault_addr: Option<String>,
+    pub vault_transit_key: Option<String>,
+    /// Vault token (never printed; `Debug` omits it)
+    pub vault_token: Option<String>,
 }
 
 impl fmt::Debug for Config {
@@ -250,6 +266,32 @@ impl Config {
             r.errors.push("RELAYER_CHANNEL_SECRETS: needs RELAYER_SECRET, and is not supported on mainnet yet".into());
         }
 
+        let shared_rate_limits = match r.string("RATE_LIMIT_STORE", "memory").as_str() {
+            "postgres" => true,
+            "memory" => false,
+            _ => {
+                r.errors.push("RATE_LIMIT_STORE: must be `memory` or `postgres`".into());
+                false
+            }
+        };
+
+        let relayer_signer = r.string("RELAYER_SIGNER", "local");
+        let vault_addr = r.optional("VAULT_ADDR");
+        let vault_transit_key = r.optional("VAULT_TRANSIT_KEY");
+        let vault_token = r.optional("VAULT_TOKEN");
+        match relayer_signer.as_str() {
+            "local" => {}
+            "vault" => {
+                if vault_addr.is_none() || vault_transit_key.is_none() || vault_token.is_none() {
+                    r.errors.push("RELAYER_SIGNER=vault: needs VAULT_ADDR, VAULT_TRANSIT_KEY and VAULT_TOKEN".into());
+                }
+                if relayer_secret.is_some() {
+                    r.errors.push("RELAYER_SIGNER=vault: remove RELAYER_SECRET, the key stays in Vault".into());
+                }
+            }
+            _ => r.errors.push("RELAYER_SIGNER: must be `local` or `vault`".into()),
+        }
+
         let ai_repo_context_mode = r.string("AI_REPO_CONTEXT", "off");
         let ai_repo_context = match ai_repo_context_mode.as_str() {
             "basic" => true,
@@ -298,6 +340,12 @@ impl Config {
             r.errors.push(format!("AI_TIMEOUT_SECS: must be between 1 and {} (below the {JOB_LEASE_SECS}s job lease)", JOB_LEASE_SECS - 1));
         }
 
+        let ai_price_input = r.number("AI_PRICE_INPUT_PER_MTOK", 3.0f64);
+        let ai_price_output = r.number("AI_PRICE_OUTPUT_PER_MTOK", 15.0f64);
+        if ai_price_input <= 0.0 || ai_price_output <= 0.0 {
+            r.errors.push("AI_PRICE_INPUT_PER_MTOK and AI_PRICE_OUTPUT_PER_MTOK: must be positive".into());
+        }
+
         let cfg = Config {
             log_level: r.string("LOG_LEVEL", "info"),
             port: r.number("PORT", 3001u16),
@@ -319,6 +367,10 @@ impl Config {
             ai_max_per_pr_per_day: r.number("AI_MAX_REVIEWS_PER_PR_PER_DAY", 5u32),
             ai_max_per_repo_per_day: r.number("AI_MAX_REVIEWS_PER_REPO_PER_DAY", 50u32),
             ai_repo_context,
+            ai_price_input_per_mtok: ai_price_input,
+            ai_price_output_per_mtok: ai_price_output,
+            ai_daily_budget_usd: r.optional("AI_DAILY_BUDGET_USD").and_then(|v| v.parse::<f64>().ok()),
+            ai_monthly_budget_usd: r.optional("AI_MONTHLY_BUDGET_USD").and_then(|v| v.parse::<f64>().ok()),
             explorer_tx_template: r.string("EXPLORER_TX_URL_TEMPLATE", default_explorer),
             relayer_secret,
             relayer_channel_secrets,
@@ -338,6 +390,11 @@ impl Config {
             indexer_start_ledger: r.raw("INDEXER_START_LEDGER").and_then(|v| v.parse().ok()),
             db_max_connections: r.number("DB_MAX_CONNECTIONS", 10u32),
             worker_concurrency: r.number("WORKER_CONCURRENCY", 4usize),
+            shared_rate_limits,
+            relayer_signer,
+            vault_addr,
+            vault_transit_key,
+            vault_token,
         };
         if r.errors.is_empty() { Ok(cfg) } else { Err(ConfigError(r.errors)) }
     }
@@ -447,6 +504,24 @@ mod tests {
     }
 
     #[test]
+    fn rate_limit_store_defaults_to_memory_and_accepts_postgres() {
+        assert!(!Config::from_map(&with(&[])).unwrap().shared_rate_limits);
+        assert!(Config::from_map(&with(&[("RATE_LIMIT_STORE", "postgres")])).unwrap().shared_rate_limits);
+        assert!(Config::from_map(&with(&[("RATE_LIMIT_STORE", "redis")])).unwrap_err().to_string().contains("RATE_LIMIT_STORE"));
+    }
+
+    #[test]
+    fn vault_relayer_signer_needs_its_settings_and_no_local_key() {
+        let vault = [("VAULT_ADDR", "https://vault.internal:8200"), ("VAULT_TRANSIT_KEY", "relayer"), ("VAULT_TOKEN", "s.testtoken")];
+        let mut ok = vault.to_vec();
+        ok.push(("RELAYER_SIGNER", "vault"));
+        assert_eq!(Config::from_map(&with(&ok)).unwrap().relayer_signer, "vault");
+        let e = Config::from_map(&with(&[("RELAYER_SIGNER", "vault")])).unwrap_err().to_string();
+        assert!(e.contains("VAULT_ADDR"));
+        assert!(Config::from_map(&with(&[("RELAYER_SIGNER", "hsm")])).unwrap_err().to_string().contains("RELAYER_SIGNER"));
+    }
+
+    #[test]
     fn rejects_malformed_values() {
         assert!(Config::from_map(&with(&[("BOUNTY_CONTRACT_ID", "GABC")])).is_err());
         assert!(Config::from_map(&with(&[("SESSION_SECRET", "short")])).is_err());
@@ -481,5 +556,35 @@ mod tests {
         assert!(c.secure_cookies());
         assert_eq!(c.api_public_url, "https://api.example");
         assert_eq!(c.explorer_tx("abc"), "https://stellar.expert/explorer/testnet/tx/abc");
+    }
+
+    #[test]
+    fn ai_pricing_and_budget_defaults() {
+        let c = Config::from_map(&base()).unwrap();
+        assert_eq!(c.ai_price_input_per_mtok, 3.0);
+        assert_eq!(c.ai_price_output_per_mtok, 15.0);
+        assert_eq!(c.ai_daily_budget_usd, None);
+        assert_eq!(c.ai_monthly_budget_usd, None);
+    }
+
+    #[test]
+    fn ai_pricing_and_budget_custom() {
+        let c = Config::from_map(&with(&[
+            ("AI_PRICE_INPUT_PER_MTOK", "2.5"),
+            ("AI_PRICE_OUTPUT_PER_MTOK", "12.5"),
+            ("AI_DAILY_BUDGET_USD", "50"),
+            ("AI_MONTHLY_BUDGET_USD", "1000"),
+        ]))
+        .unwrap();
+        assert_eq!(c.ai_price_input_per_mtok, 2.5);
+        assert_eq!(c.ai_price_output_per_mtok, 12.5);
+        assert_eq!(c.ai_daily_budget_usd, Some(50.0));
+        assert_eq!(c.ai_monthly_budget_usd, Some(1000.0));
+    }
+
+    #[test]
+    fn ai_pricing_must_be_positive() {
+        let e = Config::from_map(&with(&[("AI_PRICE_INPUT_PER_MTOK", "0")])).unwrap_err().to_string();
+        assert!(e.contains("must be positive"));
     }
 }

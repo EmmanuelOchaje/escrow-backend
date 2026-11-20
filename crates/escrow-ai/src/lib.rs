@@ -12,6 +12,7 @@
 //! an injection attempt.
 
 pub mod anthropic;
+pub mod budget;
 pub mod eval;
 pub mod input;
 pub mod pipeline;
@@ -19,5 +20,6 @@ pub mod review;
 pub mod schema;
 
 pub use anthropic::AnthropicModel;
+pub use budget::{BudgetStatus, CostMicroUsd};
 pub use pipeline::{ReviewDeps, ReviewOutcome, run_pr_review};
 pub use review::{ModelError, ModelOutput, ModelPort};

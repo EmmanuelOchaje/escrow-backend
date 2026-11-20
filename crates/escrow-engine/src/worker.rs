@@ -175,6 +175,8 @@ pub async fn run_periodic(w: Arc<WorkerDeps>, stop: CancellationToken) {
                 let _ = sessions::purge_challenges(&w.db.pool, now - ChronoDuration::days(1)).await;
                 let _ = jobs::purge_done(&w.db.pool, now - ChronoDuration::days(7)).await;
                 let _ = jobs::reap_exhausted(&w.db.pool).await;
+                // rate-limit windows older than a day are never read again (the shared limiter counts per window)
+                let _ = escrow_db::rate_limits::prune(&w.db.pool, 86_400).await;
             }
         }
     }

@@ -29,6 +29,9 @@ The worker checks every minute and sends each distinct message at most once an h
 | `N dispute(s) older than 36 h` | The promised response time has passed. | Work the queue: `GET /admin/disputes`. |
 | `Bounty N has a merged PR (STATUS) and its refund window is near` | A merged PR is unpaid and the maintainer can reclaim the funds within 72 h of the deadline. | Unblock the payout (usually `PENDING_WALLET`: ask the contributor to link a wallet; or the maintainer must sign). |
 | `N background job(s) gave up and are dead` | A job exhausted its attempts or can never succeed. | See [dead jobs](#dead-jobs). |
+| `Solvency alert (critical) for token TOKEN: Insolvency…` | The contract holds fewer tokens than it thinks it should (a bug, exploit, or token oddity). **This is severe.** | Pause funding via the admin multisig (`set_paused=true`), stop the relayer (kill the worker), and investigate. See [contract insolvency](#contract-insolvency). |
+| `Solvency alert (warning) for token TOKEN: …accounting mismatch…` | Chain and database totals disagree, usually from an indexer gap. | Check `event_gaps` for recent entries. Run `escrowd reconcile --dry-run` to see what would be fixed. |
+| `Indexer event gap detected: ledgers N–M` | The indexer was behind longer than the RPC retains events. Events in that range are lost forever. | Run `escrowd reconcile` to bring non-terminal bounties from the contract into the database. See [the indexer fell outside RPC retention](#the-indexer-fell-outside-rpc-retention). |
 
 ## Common situations
 
@@ -77,6 +80,41 @@ VALUES ('card.refresh', '{"bountyId": 4}', 8, 'card:4');
 ### Webhooks are not arriving
 
 GitHub App → Advanced → Recent deliveries. `401` from us means the secret differs from `GITHUB_WEBHOOK_SECRET`; connection errors mean DNS, TLS or the host's firewall. A redelivery is safe (de-duplicated by delivery id).
+
+### Contract insolvency
+
+The contract is holding fewer tokens than its internal accounting says. This is a **critical** issue that stops all payouts immediately.
+
+**Prevention:** Every few minutes, `escrowd doctor` checks `held == balance` and `funded == released_net + fees + refunded + held`. If either fails, the alert fires.
+
+**Recovery:**
+1. Pause funding via admin multisig: `set_paused=true` on the contract (stop further risk).
+2. Stop the relayer: kill the worker process or set `RELAYER_SECRET=` and restart.
+3. Investigate: 
+   - Query the contract with `escrowd reindex --dry-run` to see the exact mismatch.
+   - Check the token contract (a glitch? A bad transfer?).
+   - Review recent `release`, `refund` and `pay` calls in the audit log.
+4. Consult the contract code and your token provider. Recovery likely requires a maintainer decision (e.g., partial payout, forgiving a bounty).
+
+### The indexer fell outside RPC retention
+
+The indexer was down or slow longer than the Soroban RPC provider keeps events (usually 1–7 days). The events in the gap are gone; the cursor has jumped forward or the request failed, and the database has missed transitions.
+
+**Alert:** `Indexer event gap detected: ledgers N–M` and/or `Solvency alert (warning): …accounting mismatch…`.
+
+**Recovery:**
+```bash
+# Dry run: see what state changes would be made
+escrowd reconcile --dry-run
+
+# Apply: for every non-terminal bounty in the database, fetch its state from the contract
+# and bring the row into sync. Missing derived data (tx hashes) are marked unknown.
+escrowd reconcile
+
+# Resume indexing from the latest ledger; the gap alert clears.
+```
+
+Each row changed by reconciliation is logged in the audit log with before/after values. If a bounty was in the gap, `reconcile` will find its true status (paid, refunded, etc.) and correct the database.
 
 ### The API is up but the worker is not
 
