@@ -7,7 +7,7 @@ use escrow_core::{
     command::{Command, TokenSymbol, parse_command},
     security::random_b64url,
 };
-use escrow_db::{Db, audit, bounties, disputes, intents, prs};
+use escrow_db::{Db, audit, bounties, disputes, github, intents, prs};
 use escrow_github::{GithubApi, payloads::IssueCommentEvent};
 use std::sync::Arc;
 
@@ -89,6 +89,10 @@ pub async fn handle_issue_comment(d: &CommandDeps, ev: &IssueCommentEvent) -> Re
             let Some(reviews) = &d.reviews else {
                 return Ok("ignored:reviews-disabled".into());
             };
+            if !github::ai_reviews_enabled(&d.db.pool, ev.repository.id).await? {
+                reply("AI reviews are turned off for this repository.".into()).await?;
+                return Ok("ignored:repo-opted-out".into());
+            }
             reviews.schedule(pr.id, std::time::Duration::ZERO, true).await.map_err(EngineError::Other)?;
             reply("Re-review queued. The review comment on this PR will be updated shortly.".into()).await?;
             Ok("review-requested".into())

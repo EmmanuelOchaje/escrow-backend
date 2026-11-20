@@ -69,15 +69,18 @@ fn init_logging(to_stderr: bool) {
     }
 }
 
-fn load_env_file() {
-    match std::env::var("ENV_FILE") {
-        Ok(f) => {
-            let _ = dotenvy::from_filename(f);
+/// Loads `ENV_FILE` when it is set, failing if it cannot be read, so a typo in the path never starts the service
+/// on the bare process environment. Without `ENV_FILE`, a `.env` in the working directory is optional.
+fn load_env_file(explicit: Option<&str>) -> Result<()> {
+    match explicit {
+        Some(f) => {
+            dotenvy::from_filename(f).with_context(|| format!("could not load ENV_FILE {f}"))?;
         }
-        Err(_) => {
+        None => {
             let _ = dotenvy::dotenv();
         }
     }
+    Ok(())
 }
 
 fn auto_migrate() -> bool {
@@ -86,7 +89,7 @@ fn auto_migrate() -> bool {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    load_env_file();
+    load_env_file(std::env::var("ENV_FILE").ok().as_deref())?;
     let cli = Cli::parse();
     if matches!(cli.cmd, Cmd::Healthcheck) {
         return healthcheck();
@@ -166,6 +169,26 @@ fn healthcheck_with_timeouts(
 
 #[cfg(test)]
 mod tests {
+    use super::load_env_file;
+
+    #[test]
+    fn an_explicit_env_file_that_is_missing_aborts_with_its_path() {
+        let err = load_env_file(Some("/nonexistent/escrow/prod.env")).unwrap_err();
+        assert!(format!("{err:#}").contains("/nonexistent/escrow/prod.env"), "{err:#}");
+    }
+
+    #[test]
+    fn an_explicit_env_file_that_exists_is_loaded() {
+        let path = std::env::temp_dir().join(format!("escrowd-env-{}.env", std::process::id()));
+        std::fs::write(&path, "ESCROWD_ENV_FILE_TEST=loaded\n").unwrap();
+        load_env_file(Some(path.to_str().unwrap())).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(std::env::var("ESCROWD_ENV_FILE_TEST").as_deref(), Ok("loaded"));
+    }
+
+    #[test]
+    fn the_default_env_file_stays_optional() {
+        load_env_file(None).unwrap();
     use super::*;
     use std::{
         io::{Read, Write},
