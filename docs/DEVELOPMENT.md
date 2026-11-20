@@ -13,7 +13,19 @@ scripts/test.sh          # fmt --check, clippy -D warnings, all tests, cargo aud
 
 `#[sqlx::test]` creates and drops a throwaway database per test, so the tests run in parallel and never read or modify the database `DATABASE_URL` points at. Nothing needs a network except the three opt-in live tests.
 
-## Test coverage
+## TypeScript backend tests
+
+The original TypeScript backend (`src/`, `test/`, `package.json`) runs in CI alongside the Rust backend:
+
+```bash
+npm ci                           # install dependencies
+npm run test                     # run vitest suite
+npm run typecheck                # TypeScript type checking
+```
+
+The TypeScript backend continues to support the Vercel deployment. While the Rust backend is the primary implementation, the TypeScript tests ensure the reference implementation remains working.
+
+## Test coverage (Rust)
 
 To generate a coverage report locally:
 
@@ -24,7 +36,7 @@ cargo llvm-cov --workspace --html
 open target/llvm-cov/html/index.html
 ```
 
-The coverage report shows which branches in the payout and indexer paths are exercised by tests.
+The coverage report shows which branches in the payout and indexer paths are exercised by tests. Coverage is also reported in CI and uploaded as an artifact on each push.
 
 ## Running locally
 

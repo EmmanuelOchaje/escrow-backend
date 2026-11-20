@@ -158,11 +158,13 @@ stateDiagram-v2
     PENDING_WALLET --> AWAITING_MAINTAINER: advance() [chain re-read]
     PENDING_WALLET --> FAILED: advance() [chain re-read]
     
-    AWAITING_MAINTAINER --> QUEUED: indexer confirms release
-    AWAITING_MAINTAINER --> FAILED: bounty status changes [chain re-read]
+    AWAITING_MAINTAINER --> CONFIRMED: confirm_from_chain() [indexer sees released event]
+    AWAITING_MAINTAINER --> FAILED: advance() [bounty status changed]
     
     QUEUED --> SUBMITTED: relay_release() [chain re-read]
-    SUBMITTED --> CONFIRMED: settle() - tx success
+    QUEUED --> CONFIRMED: confirm_from_chain() [indexer sees released event]
+    
+    SUBMITTED --> CONFIRMED: settle() - tx success or found on chain
     SUBMITTED --> FAILED: settle() - tx rejected or max retries
     SUBMITTED --> QUEUED: settle() - tx expired [chain re-read]
     
@@ -170,32 +172,34 @@ stateDiagram-v2
     FAILED --> [*]
     
     note right of PENDING_WALLET
-        Waiting for winner wallet link
-        Re-reads chain before moving
+        Waiting for contributor wallet link
+        Re-reads chain before advancing
     end note
     
     note right of AWAITING_MAINTAINER
-        Waiting for maintainer to sign release
-        Chain status checked before confirming
+        Waiting for maintainer to sign and submit release
+        Transitions to CONFIRMED when indexer sees released event on chain
     end note
     
     note right of QUEUED
-        Ready for relayer to submit
-        Only state submitted from
+        Ready for relayer to submit release
+        Re-reads chain before submitting
     end note
     
     note right of SUBMITTED
+        Release submitted to chain
         Hash stored BEFORE waiting (crash-safe)
-        May re-read chain if tx expires
+        May expire and return to QUEUED for resubmission
     end note
     
     note right of CONFIRMED
         Terminal: release confirmed on chain
+        Indexer marks when seeing released event (from any prior state)
     end note
     
     note right of FAILED
         Terminal: payout cannot proceed
-        Admin can retry
+        Admin can retry with /admin/payouts/{id}/retry
     end note
 ```
 

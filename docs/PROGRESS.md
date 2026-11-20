@@ -6,15 +6,15 @@ What was built, what was verified and how, and what is open. Dates are 2026; the
 
 | Area | State |
 |---|---|
-| `escrow-core`: amounts, fees, `/bounty` grammar, criteria and closing-keyword parsing, card, webhook HMAC, CSRF, PKCE/OAuth state, config | done, 59 tests |
-| `escrow-chain`: Soroban RPC client, XDR, tx build/simulate/assemble/sign, event decoding, submission allow-list, relayer (with archived-state restore) | done, 54 tests + 4 live |
-| `escrow-db`: schema, repositories, Postgres job queue | done, 27 tests on real Postgres |
-| `escrow-github`: App JWT + installation tokens, REST, OAuth, payload types | done, 23 tests |
-| `escrow-payouts`: merge → payout state machine, relayer loop, crash/expiry recovery | done, 20 tests |
-| `escrow-ai`: advisory reviewer, prompt fencing, ranking, 12 eval cases | done, 41 tests |
-| `escrow-engine`: indexer, commands, PRs, webhooks, card sync, reminders, alerts, worker | done, 63 tests |
-| `escrow-api`: 29 operations, sign-in, CSRF, wallet linking, funding, admin, webhooks, metrics, limits | done, 48 tests |
-| `escrowd`: serve / worker / all / migrate / doctor / sync-installations / reindex / eval / healthcheck | done; architecture rules enforced by 6 tests |
+| `escrow-core`: amounts, fees, `/bounty` grammar, criteria and closing-keyword parsing, card, webhook HMAC, CSRF, PKCE/OAuth state, config | done, comprehensive tests |
+| `escrow-chain`: Soroban RPC client, XDR, tx build/simulate/assemble/sign, event decoding, submission allow-list, relayer (with archived-state restore) | done, with live contract tests |
+| `escrow-db`: schema, repositories, Postgres job queue | done, real Postgres tests |
+| `escrow-github`: App JWT + installation tokens, REST, OAuth, payload types | done, full coverage |
+| `escrow-payouts`: merge → payout state machine, relayer loop, crash/expiry recovery | done, full coverage |
+| `escrow-ai`: advisory reviewer, prompt fencing, ranking, 12 eval cases | done, full coverage |
+| `escrow-engine`: indexer, commands, PRs, webhooks, card sync, reminders, alerts, worker | done, full coverage |
+| `escrow-api`: 29 operations, sign-in, CSRF, wallet linking, funding, admin, webhooks, metrics, limits | done, full coverage |
+| `escrowd`: serve / worker / all / migrate / doctor / sync-installations / reindex / eval / healthcheck | done; architecture rules enforced |
 | Docs, OpenAPI (kept honest by a test), Docker, Compose, Caddy, CI, import-from-Prisma script | done |
 
 **All tests passing. Clippy clean with warnings denied. `cargo audit` clean (345 crates). `unsafe` forbidden.**
