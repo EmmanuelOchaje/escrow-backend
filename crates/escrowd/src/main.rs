@@ -36,7 +36,11 @@ enum Cmd {
     /// Apply database migrations and exit
     Migrate,
     /// Check configuration and dependencies; exits non-zero on a hard failure
-    Doctor,
+    Doctor {
+        /// Output check results as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Reconcile GitHub App installations and repositories now
     SyncInstallations,
     /// Re-read contract events from a ledger and apply them (safe to repeat)
@@ -51,15 +55,17 @@ enum Cmd {
     Healthcheck,
 }
 
-fn init_logging() {
+fn init_logging(to_stderr: bool) {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .or_else(|_| tracing_subscriber::EnvFilter::try_new(std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".into())))
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    let b = tracing_subscriber::fmt().with_env_filter(filter).with_target(false);
-    if std::env::var("LOG_FORMAT").is_ok_and(|f| f == "json") {
-        b.json().init();
+    let json_logs = std::env::var("LOG_FORMAT").is_ok_and(|f| f == "json");
+    if to_stderr {
+        let b = tracing_subscriber::fmt().with_env_filter(filter).with_target(false).with_writer(std::io::stderr);
+        if json_logs { b.json().init() } else { b.init() }
     } else {
-        b.init();
+        let b = tracing_subscriber::fmt().with_env_filter(filter).with_target(false);
+        if json_logs { b.json().init() } else { b.init() }
     }
 }
 
@@ -85,13 +91,13 @@ async fn main() -> Result<()> {
     if matches!(cli.cmd, Cmd::Healthcheck) {
         return healthcheck();
     }
-    init_logging();
+    init_logging(matches!(cli.cmd, Cmd::Doctor { json: true }));
     // fail fast with every problem listed, before touching the network
     let cfg = Config::from_env().map_err(|e| anyhow::anyhow!("{e}"))?;
 
     match cli.cmd {
         Cmd::Healthcheck => unreachable!("handled before the configuration is loaded"),
-        Cmd::Doctor => doctor::run(cfg).await,
+        Cmd::Doctor { json } => doctor::run(cfg, json).await,
         Cmd::Migrate => {
             runtime::connect(cfg, true).await?;
             println!("migrations applied");
