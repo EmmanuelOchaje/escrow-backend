@@ -21,6 +21,7 @@ pub mod pulls;
 pub mod reconcile;
 pub mod solvency;
 pub mod sync;
+pub mod webhook_guard;
 pub mod worker;
 
 pub use error::EngineError;
