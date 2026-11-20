@@ -97,6 +97,14 @@ pub struct Config {
     pub indexer_start_ledger: Option<u32>,
     pub db_max_connections: u32,
     pub worker_concurrency: usize,
+    /// `RATE_LIMIT_STORE=postgres`: request budgets are counted in Postgres and shared by every API instance
+    pub shared_rate_limits: bool,
+    /// `local` (default) or `vault`: where the relayer's Ed25519 signatures come from
+    pub relayer_signer: String,
+    pub vault_addr: Option<String>,
+    pub vault_transit_key: Option<String>,
+    /// Vault token (never printed; `Debug` omits it)
+    pub vault_token: Option<String>,
 }
 
 impl fmt::Debug for Config {
@@ -258,6 +266,32 @@ impl Config {
             r.errors.push("RELAYER_CHANNEL_SECRETS: needs RELAYER_SECRET, and is not supported on mainnet yet".into());
         }
 
+        let shared_rate_limits = match r.string("RATE_LIMIT_STORE", "memory").as_str() {
+            "postgres" => true,
+            "memory" => false,
+            _ => {
+                r.errors.push("RATE_LIMIT_STORE: must be `memory` or `postgres`".into());
+                false
+            }
+        };
+
+        let relayer_signer = r.string("RELAYER_SIGNER", "local");
+        let vault_addr = r.optional("VAULT_ADDR");
+        let vault_transit_key = r.optional("VAULT_TRANSIT_KEY");
+        let vault_token = r.optional("VAULT_TOKEN");
+        match relayer_signer.as_str() {
+            "local" => {}
+            "vault" => {
+                if vault_addr.is_none() || vault_transit_key.is_none() || vault_token.is_none() {
+                    r.errors.push("RELAYER_SIGNER=vault: needs VAULT_ADDR, VAULT_TRANSIT_KEY and VAULT_TOKEN".into());
+                }
+                if relayer_secret.is_some() {
+                    r.errors.push("RELAYER_SIGNER=vault: remove RELAYER_SECRET, the key stays in Vault".into());
+                }
+            }
+            _ => r.errors.push("RELAYER_SIGNER: must be `local` or `vault`".into()),
+        }
+
         let ai_repo_context_mode = r.string("AI_REPO_CONTEXT", "off");
         let ai_repo_context = match ai_repo_context_mode.as_str() {
             "basic" => true,
@@ -356,6 +390,11 @@ impl Config {
             indexer_start_ledger: r.raw("INDEXER_START_LEDGER").and_then(|v| v.parse().ok()),
             db_max_connections: r.number("DB_MAX_CONNECTIONS", 10u32),
             worker_concurrency: r.number("WORKER_CONCURRENCY", 4usize),
+            shared_rate_limits,
+            relayer_signer,
+            vault_addr,
+            vault_transit_key,
+            vault_token,
         };
         if r.errors.is_empty() { Ok(cfg) } else { Err(ConfigError(r.errors)) }
     }
@@ -462,6 +501,24 @@ mod tests {
         assert!(Config::from_map(&with(&[("RELAYER_SECRET", &sk)])).is_ok());
         let e = Config::from_map(&with(&[("RELAYER_SECRET", &sk), ("STELLAR_NETWORK", "mainnet")])).unwrap_err().to_string();
         assert!(e.contains("must not be used on mainnet"));
+    }
+
+    #[test]
+    fn rate_limit_store_defaults_to_memory_and_accepts_postgres() {
+        assert!(!Config::from_map(&with(&[])).unwrap().shared_rate_limits);
+        assert!(Config::from_map(&with(&[("RATE_LIMIT_STORE", "postgres")])).unwrap().shared_rate_limits);
+        assert!(Config::from_map(&with(&[("RATE_LIMIT_STORE", "redis")])).unwrap_err().to_string().contains("RATE_LIMIT_STORE"));
+    }
+
+    #[test]
+    fn vault_relayer_signer_needs_its_settings_and_no_local_key() {
+        let vault = [("VAULT_ADDR", "https://vault.internal:8200"), ("VAULT_TRANSIT_KEY", "relayer"), ("VAULT_TOKEN", "s.testtoken")];
+        let mut ok = vault.to_vec();
+        ok.push(("RELAYER_SIGNER", "vault"));
+        assert_eq!(Config::from_map(&with(&ok)).unwrap().relayer_signer, "vault");
+        let e = Config::from_map(&with(&[("RELAYER_SIGNER", "vault")])).unwrap_err().to_string();
+        assert!(e.contains("VAULT_ADDR"));
+        assert!(Config::from_map(&with(&[("RELAYER_SIGNER", "hsm")])).unwrap_err().to_string().contains("RELAYER_SIGNER"));
     }
 
     #[test]
