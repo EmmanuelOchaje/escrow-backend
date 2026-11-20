@@ -17,7 +17,7 @@ What was built, what was verified and how, and what is open. Dates are 2026; the
 | `escrowd`: serve / worker / all / migrate / doctor / sync-installations / reindex / eval / healthcheck | done; architecture rules enforced by 6 tests |
 | Docs, OpenAPI (kept honest by a test), Docker, Compose, Caddy, CI, import-from-Prisma script | done |
 
-**341 tests, all passing. Clippy clean with warnings denied. `cargo audit` clean (345 crates). `unsafe` forbidden.**
+**All tests passing. Clippy clean with warnings denied. `cargo audit` clean (345 crates). `unsafe` forbidden.**
 
 ## Verified against the real world
 

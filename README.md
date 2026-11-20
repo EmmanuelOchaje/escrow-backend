@@ -17,7 +17,7 @@ The backend of **SkillEscrow Bounties**, written in Rust. A maintainer comments 
 |---|---|
 | **Language / runtime** | Rust 2024, tokio, axum, sqlx |
 | **Moving parts** | one binary (`escrowd`) + PostgreSQL. No Redis, no Node |
-| **Size** | ~16k lines across 9 crates, **341 tests** (all green), clippy clean with warnings denied, `cargo audit` clean, `unsafe` forbidden; the release binary is 11.7 MB |
+| **Size** | ~16k lines across 9 crates, all tests pass (see CI), clippy clean with warnings denied, `cargo audit` clean, `unsafe` forbidden; the release binary is 11.7 MB |
 | **Verified against** | the real Stellar testnet contract and the real GitHub App (see [what has been proven](#what-has-and-has-not-been-proven)) |
 | **Pairs with** | [`escrow-contracts`](https://github.com/Soroban-escrow/escrow-contracts) (the Soroban contract) and [`escrow-app`](https://github.com/Soroban-escrow/escrow-app) (the web UI) |
 
@@ -209,7 +209,7 @@ Errors are always `{ "error": { "code", "message" } }`. Anything the contract it
 ```bash
 # Postgres is needed for the database-backed tests. Each test gets its own throwaway database.
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
-cargo test --workspace            # 341 tests; under a minute once built
+cargo test --workspace            # all tests pass; under a minute once built
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
