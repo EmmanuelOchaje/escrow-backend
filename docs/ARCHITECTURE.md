@@ -148,6 +148,63 @@ The relayer's transactions carry a **2-minute time bound**. That is what makes "
 
 When the indexer later sees the `released` event it marks the payout `CONFIRMED` with the **chain's** transaction hash and queues the "Paid …" comment. That covers every release path: the relayer, the maintainer signing, or a dispute resolution.
 
+### PayoutStatus state machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING_WALLET: on_merge()
+    
+    PENDING_WALLET --> QUEUED: advance() [chain re-read]
+    PENDING_WALLET --> AWAITING_MAINTAINER: advance() [chain re-read]
+    PENDING_WALLET --> FAILED: advance() [chain re-read]
+    
+    AWAITING_MAINTAINER --> QUEUED: indexer confirms release
+    AWAITING_MAINTAINER --> FAILED: bounty status changes [chain re-read]
+    
+    QUEUED --> SUBMITTED: relay_release() [chain re-read]
+    SUBMITTED --> CONFIRMED: settle() - tx success
+    SUBMITTED --> FAILED: settle() - tx rejected or max retries
+    SUBMITTED --> QUEUED: settle() - tx expired [chain re-read]
+    
+    CONFIRMED --> [*]
+    FAILED --> [*]
+    
+    note right of PENDING_WALLET
+        Waiting for winner wallet link
+        Re-reads chain before moving
+    end note
+    
+    note right of AWAITING_MAINTAINER
+        Waiting for maintainer to sign release
+        Chain status checked before confirming
+    end note
+    
+    note right of QUEUED
+        Ready for relayer to submit
+        Only state submitted from
+    end note
+    
+    note right of SUBMITTED
+        Hash stored BEFORE waiting (crash-safe)
+        May re-read chain if tx expires
+    end note
+    
+    note right of CONFIRMED
+        Terminal: release confirmed on chain
+    end note
+    
+    note right of FAILED
+        Terminal: payout cannot proceed
+        Admin can retry
+    end note
+```
+
+**Chain re-read locations**:
+- `on_merge`: confirms bounty still OPEN before creating payout
+- `advance`: verifies bounty still OPEN, checks wallet, confirms relayer allowed
+- `relay_release`: checks if already released to this winner, verifies bounty is still OPEN
+- `settle`: on expired tx, checks if bounty was paid anyway or still OPEN (to requeue)
+
 ## The job queue
 
 `escrow-db::jobs` (the table) and `escrow-engine::worker` (the loop). It replaces Redis/BullMQ.
@@ -191,7 +248,7 @@ Advisory and isolated. Defence in layers: untrusted text is **fenced** (and the 
 
 - **Postgres instead of Redis for the queue.** One service fewer to run, host and back up; atomicity with the data (a job is enqueued in the same transaction as its cause); and the volume here (webhooks, card refreshes, reviews) is tiny. The trade-off is that Postgres is the only moving dependency and a very high job rate would eventually want a dedicated broker. That is not this workload.
 - **Runtime-checked SQL (no build-time database).** The build needs no database or offline query cache, and every query is exercised by a test against real Postgres. The cost is that a typo is caught by tests, not the compiler.
-- **Traits at every seam** (`ChainReader`, `EventSource`, `TxBuilder`, `ReleaseSigner`, `GithubApi`, `ModelPort`, `Notifier`). Production wires real implementations; tests wire in-memory ones, which is why 341 tests need no network. It is also how a KMS signer will slot in.
+- **Traits at every seam** (`ChainReader`, `EventSource`, `TxBuilder`, `ReleaseSigner`, `GithubApi`, `ModelPort`, `Notifier`). Production wires real implementations; tests wire in-memory ones, so the full test suite runs without a network. It is also how a KMS signer will slot in.
 - **Crate boundaries as architecture.** The cheapest way to guarantee "the AI cannot affect payouts" is for it to be impossible to link, and for a test to say so.
 - **A hand-written Soroban RPC client over `stellar-xdr`** rather than a large SDK: a few JSON-RPC methods, XDR types from the official crate, and full control of what we sign and submit. The only key the process ever holds signs one kind of transaction.
 - **The same HTTP contract as the TypeScript API**, so the web app, the contract and the docs did not have to change.

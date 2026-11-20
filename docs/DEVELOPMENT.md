@@ -13,6 +13,19 @@ scripts/test.sh          # fmt --check, clippy -D warnings, all tests, cargo aud
 
 `#[sqlx::test]` creates and drops a throwaway database per test, so the tests run in parallel and never read or modify the database `DATABASE_URL` points at. Nothing needs a network except the three opt-in live tests.
 
+## Test coverage
+
+To generate a coverage report locally:
+
+```bash
+cargo install cargo-llvm-cov
+export DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
+cargo llvm-cov --workspace --html
+open target/llvm-cov/html/index.html
+```
+
+The coverage report shows which branches in the payout and indexer paths are exercised by tests.
+
 ## Running locally
 
 ```bash
