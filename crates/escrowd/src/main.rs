@@ -134,10 +134,7 @@ async fn main() -> Result<()> {
 /// A dependency-free HTTP probe: the runtime image has no curl. Reads PORT from the environment like the server does.
 fn healthcheck() -> Result<()> {
     use std::{net::SocketAddr, time::Duration};
-    let port: u16 = std::env::var("PORT")
-        .unwrap_or_else(|_| "3001".into())
-        .parse()
-        .context("invalid PORT")?;
+    let port: u16 = std::env::var("PORT").unwrap_or_else(|_| "3001".into()).parse().context("invalid PORT")?;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     healthcheck_with_timeouts(addr, Duration::from_secs(3), Duration::from_secs(3), Duration::from_secs(5))
 }
@@ -152,12 +149,11 @@ fn healthcheck_with_timeouts(
         io::{Read, Write},
         net::TcpStream,
     };
-    let mut s = TcpStream::connect_timeout(&addr, connect_timeout)
-        .with_context(|| format!("connect failed: could not connect to {addr}"))?;
+    let mut s =
+        TcpStream::connect_timeout(&addr, connect_timeout).with_context(|| format!("connect failed: could not connect to {addr}"))?;
     s.set_write_timeout(Some(write_timeout)).context("set write timeout failed")?;
     s.set_read_timeout(Some(read_timeout)).context("set read timeout failed")?;
-    s.write_all(b"GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n")
-        .context("write failed: could not send /health request")?;
+    s.write_all(b"GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n").context("write failed: could not send /health request")?;
     let mut out = String::new();
     s.read_to_string(&mut out).context("read failed: could not read /health response")?;
     if out.starts_with("HTTP/1.0 200") || out.starts_with("HTTP/1.1 200") {
@@ -189,6 +185,7 @@ mod tests {
     #[test]
     fn the_default_env_file_stays_optional() {
         load_env_file(None).unwrap();
+    }
     use super::*;
     use std::{
         io::{Read, Write},
@@ -223,7 +220,8 @@ mod tests {
 
         // Refused port reports connect failure
         let closed = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
-        let err = healthcheck_with_timeouts(closed, Duration::from_millis(200), Duration::from_secs(1), Duration::from_secs(1)).unwrap_err();
+        let err =
+            healthcheck_with_timeouts(closed, Duration::from_millis(200), Duration::from_secs(1), Duration::from_secs(1)).unwrap_err();
         assert!(format!("{err:#}").contains("connect failed"), "{err:#}");
 
         // Silent peer reports read failure

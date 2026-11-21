@@ -219,8 +219,12 @@ pub async fn run(cfg: Config, as_json: bool) -> Result<()> {
                     Ok(n) => format!("; {n} job(s) waiting for it"),
                     Err(_) => String::new(),
                 };
-                r.add(S::Warn, "github app", format!("not configured: no webhooks, comments or sign-in{waiting}. See docs/GITHUB_APP.md."));
-                r.add(Status::Warn, "github app", "not configured: no webhooks, comments or sign-in", Some("See docs/GITHUB_APP.md."));
+                r.add(
+                    Status::Warn,
+                    "github app",
+                    format!("not configured: no webhooks, comments or sign-in{waiting}"),
+                    Some("See docs/GITHUB_APP.md."),
+                );
             }
         }
     }
