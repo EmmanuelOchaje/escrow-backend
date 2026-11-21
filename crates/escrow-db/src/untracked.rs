@@ -50,7 +50,7 @@ pub async fn store_untracked_funded<'e>(
     sqlx::query(
         r#"
         INSERT INTO untracked_funded_events (id, event_id, bounty_id, repo_id, issue_number, maintainer, token, amount, fee_bps, deadline, relayer_allowed, ledger, tx_hash, closed_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9,$10,$11,$12,$13,$14)
         ON CONFLICT (id) DO NOTHING
         "#,
     )
@@ -76,7 +76,7 @@ pub async fn store_untracked_funded<'e>(
 /// Retrieves all untracked funded events for a given repo.
 pub async fn get_untracked_for_repo<'e>(ex: impl PgExecutor<'e>, repo_id: i64) -> Result<Vec<UntrackedFundedEvent>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT id, event_id, bounty_id, repo_id, issue_number, maintainer, token, amount, fee_bps, deadline, relayer_allowed, ledger, tx_hash, closed_at, created_at
+        "SELECT id, event_id, bounty_id, repo_id, issue_number, maintainer, token, amount::text AS amount, fee_bps, deadline, relayer_allowed, ledger, tx_hash, closed_at, created_at
          FROM untracked_funded_events WHERE repo_id = $1 ORDER BY ledger",
     )
     .bind(repo_id)
@@ -86,17 +86,11 @@ pub async fn get_untracked_for_repo<'e>(ex: impl PgExecutor<'e>, repo_id: i64) -
 
 /// Deletes untracked funded events that have been applied (by bounty_id).
 pub async fn delete_untracked_by_bounty<'e>(ex: impl PgExecutor<'e>, bounty_id: i64) -> Result<u64, sqlx::Error> {
-    let res = sqlx::query("DELETE FROM untracked_funded_events WHERE bounty_id = $1")
-        .bind(bounty_id)
-        .execute(ex)
-        .await?;
+    let res = sqlx::query("DELETE FROM untracked_funded_events WHERE bounty_id = $1").bind(bounty_id).execute(ex).await?;
     Ok(res.rows_affected())
 }
 
 /// Gets the minimum ledger from untracked events for a repo, to tell the operator where to reindex from.
 pub async fn min_untracked_ledger_for_repo<'e>(ex: impl PgExecutor<'e>, repo_id: i64) -> Result<Option<i32>, sqlx::Error> {
-    sqlx::query_scalar("SELECT MIN(ledger) FROM untracked_funded_events WHERE repo_id = $1")
-        .bind(repo_id)
-        .fetch_optional(ex)
-        .await
+    sqlx::query_scalar("SELECT MIN(ledger) FROM untracked_funded_events WHERE repo_id = $1").bind(repo_id).fetch_optional(ex).await
 }

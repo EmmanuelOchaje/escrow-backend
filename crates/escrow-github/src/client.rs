@@ -13,7 +13,11 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use regex::Regex;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use std::{collections::HashMap, sync::LazyLock, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    sync::LazyLock,
+    time::{Duration, Instant},
+};
 use tokio::sync::Mutex;
 
 static REPO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$").unwrap());
@@ -340,9 +344,7 @@ impl GithubClient {
             return Err(GithubError::Status { status: r.status().as_u16(), what });
         }
         let etag = r.headers().get(reqwest::header::ETAG).and_then(|v| v.to_str().ok()).map(str::to_owned);
-        if cacheable
-            && let Some(tag) = etag
-        {
+        if cacheable && let Some(tag) = etag {
             let bytes = r.bytes().await?.to_vec();
             let value = serde_json::from_slice(&bytes).map_err(|e| GithubError::Decode(e.to_string()))?;
             let mut cache = self.etags.lock().await;

@@ -7,7 +7,7 @@
 //! applied, and an older event is recognised as stale instead of being applied twice.
 
 use crate::{error::EngineError, jobs};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use escrow_chain::{ChainError, ChainEvent, ChainReader, EventSource, EventsPage, events::cursor_ledger};
 use escrow_db::{Db, audit, bounties, disputes, intents, payouts, untracked, users, webhooks};
 use serde_json::json;
@@ -49,6 +49,9 @@ pub struct EventMeta<'a> {
     pub event_id: &'a str,
     pub tx_hash: &'a str,
     pub closed_at: DateTime<Utc>,
+    /// Ledger the event was emitted in, stored on untracked events so a later
+    /// reindex knows where to start.
+    pub ledger: u32,
 }
 
 /// Applies one event inside the caller's transaction. Idempotent. Returns what happened so the caller
@@ -77,7 +80,7 @@ pub async fn apply_event(conn: &mut PgConnection, ev: &ChainEvent, meta: &EventM
                 *fee_bps,
                 DateTime::from_timestamp(i64::try_from(*deadline).unwrap_or(0), 0).unwrap_or(meta.closed_at),
                 *relayer_allowed,
-                0, // ledger will be filled by the caller
+                meta.ledger,
                 meta.tx_hash,
                 meta.closed_at,
             )
@@ -241,7 +244,7 @@ pub async fn poll_once(d: &IndexerDeps) -> Result<PollReport, EngineError> {
                     Utc::now()
                 }
             };
-            let meta = EventMeta { event_id: &raw.id, tx_hash: &raw.tx_hash, closed_at };
+            let meta = EventMeta { event_id: &raw.id, tx_hash: &raw.tx_hash, closed_at, ledger: raw.ledger };
             match apply_event(&mut tx, &ev, &meta).await? {
                 Outcome::Applied => {
                     report.applied += 1;

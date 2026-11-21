@@ -103,6 +103,7 @@ pub async fn collect_alerts(db: &Db, a: &AlertInputs) -> Result<Vec<Alert>, sqlx
     if anomaly_count > 0 {
         let word = if anomaly_count == 1 { "anomaly" } else { "anomalies" };
         out.push(Alert::new("indexer_anomalies", format!("{anomaly_count} indexer {word} in the last 24h")));
+    }
     // Bounties whose issue was transferred or deleted out from under them: recorded as `issue.*.alert`
     // audit entries by the webhook, surfaced here while the bounty is still live so it is not forgotten.
     let orphaned: Vec<(i64, String)> = sqlx::query_as(

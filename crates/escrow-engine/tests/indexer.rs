@@ -4,7 +4,9 @@ use chrono::{Duration, Utc};
 use common::*;
 use escrow_chain::ChainError;
 use escrow_db::{MIGRATOR, audit, bounties, disputes, github, intents, jobs, payouts, prs, untracked, users, webhooks};
-use escrow_engine::indexer::{CURSOR_ID, poll_once, apply_untracked_for_repo, min_untracked_ledger_for_repo, run, MAX_PAGES, FAILURE_ALERT_THRESHOLD};
+use escrow_engine::indexer::{
+    CURSOR_ID, FAILURE_ALERT_THRESHOLD, MAX_PAGES, apply_untracked_for_repo, min_untracked_ledger_for_repo, poll_once, run,
+};
 use sqlx::PgPool;
 use std::time::Duration as StdDuration;
 use tokio_util::sync::CancellationToken;
@@ -422,10 +424,7 @@ async fn run_polls_immediately_when_not_caught_up(pool: PgPool) {
     handle.await.unwrap();
 
     // Should have processed all events (more than MAX_PAGES)
-    let total_bounties = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM bounties")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let total_bounties = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM bounties").fetch_one(&pool).await.unwrap();
     assert!(total_bounties > MAX_PAGES as i64);
 }
 
