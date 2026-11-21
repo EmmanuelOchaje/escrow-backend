@@ -3,10 +3,11 @@
 use crate::{
     commands::{CommandDeps, handle_issue_comment},
     error::EngineError,
+    jobs,
     pulls::{PullDeps, handle_pull_request},
 };
 use escrow_core::criteria::parse_criteria;
-use escrow_db::{Db, bounties, github};
+use escrow_db::{Db, audit, bounties, github};
 use escrow_github::payloads::{InstallationEvent, IssueCommentEvent, IssuesEvent, PullRequestEvent};
 use serde_json::Value;
 
@@ -61,20 +62,46 @@ pub async fn dispatch_webhook(d: &DispatchDeps, event: &str, payload: &Value) ->
             let p: PullRequestEvent = parse(payload, "pull_request")?;
             Ok(format!("pull_request:{}", handle_pull_request(&d.pulls, &p).await?.len()))
         }
-        "issues" => {
-            let p: IssuesEvent = parse(payload, "issues")?;
-            if p.action != "edited" {
-                return Ok("ignored".into());
-            }
-            let n = bounties::set_issue_data_for_issue(
-                pool,
-                p.repository.id,
-                p.issue.number,
-                &p.issue.title,
-                &parse_criteria(p.issue.body.as_deref()),
-            )
-            .await?;
+        "issues" => handle_issues(pool, &parse(payload, "issues")?).await,
+        _ => Ok("ignored".into()),
+    }
+}
+
+/// Issue lifecycle events for bountied issues:
+/// * `edited` refreshes the stored title and criteria on the live bounty.
+/// * `closed` / `reopened` refresh the bounty card so it reflects the issue's new state.
+/// * `transferred` / `deleted` orphan an active bounty (its issue moved or vanished); record an operator
+///   alert so `collect_alerts` keeps surfacing it until someone acts.
+async fn handle_issues(pool: &sqlx::PgPool, p: &IssuesEvent) -> Result<String, EngineError> {
+    let repo_id = p.repository.id;
+    let number = p.issue.number;
+    match p.action.as_str() {
+        "edited" => {
+            let n =
+                bounties::set_issue_data_for_issue(pool, repo_id, number, &p.issue.title, &parse_criteria(p.issue.body.as_deref())).await?;
             Ok(format!("issues.edited:{n}"))
+        }
+        "closed" | "reopened" => {
+            let live = bounties::active_for_issues(pool, repo_id, &[number]).await?;
+            for b in &live {
+                jobs::enqueue_card_refresh(pool, b.id).await?;
+            }
+            Ok(format!("issues.{}:{}", p.action, live.len()))
+        }
+        "transferred" | "deleted" => {
+            let live = bounties::active_for_issues(pool, repo_id, &[number]).await?;
+            for b in &live {
+                // One alert per bounty per transition; `collect_alerts` reads these while the bounty is live.
+                audit::log(
+                    pool,
+                    "github",
+                    &format!("issue.{}.alert", p.action),
+                    &format!("bounty:{}", b.id),
+                    &serde_json::json!({ "repo_id": repo_id, "issue": number, "issue_url": b.issue_url }),
+                )
+                .await?;
+            }
+            Ok(format!("issues.{}:{}", p.action, live.len()))
         }
         _ => Ok("ignored".into()),
     }

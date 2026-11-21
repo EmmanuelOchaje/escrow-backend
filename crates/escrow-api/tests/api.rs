@@ -640,6 +640,52 @@ async fn unlinking_removes_the_wallet(pool: PgPool) {
     assert!(users::get(&pool, &s.user.id).await.unwrap().unwrap().wallet.is_none());
 }
 
+// #218: linking a wallet backfills the maintainer_github_id on a bounty funded on chain with no funding
+// link, so the maintainer can then open disputes and their own PRs are filtered out.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn linking_a_wallet_backfills_a_bountys_maintainer_github_id(pool: PgPool) {
+    let e = env(pool.clone(), true, vec![]);
+    seed::repo(&e.db).await;
+    // an on-chain bounty with no funding link: maintainer_github_id is unknown
+    let (sk, addr) = stellar(5);
+    bounties::insert(
+        &pool,
+        &bounties::NewBounty {
+            id: 4,
+            repo_id: seed::REPO_ID,
+            issue_number: 3,
+            issue_url: "https://github.com/acme/widgets/issues/3",
+            maintainer: &addr,
+            maintainer_github_id: None,
+            token: "CTOKEN",
+            amount: 50_000_000,
+            fee_bps: 300,
+            deadline: Utc::now() + chrono::Duration::days(14),
+            relayer_allowed: true,
+            fund_tx: "fundtx",
+            created_at: Utc::now(),
+            last_event_id: "0000000000000004-0000000001",
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(bounties::get(&pool, 4).await.unwrap().unwrap().maintainer_github_id, None);
+
+    let s = signed_in(&e, 700, "maintainer", None, false).await;
+    let c = challenge(&e, &s, &addr).await;
+    let msg = c.body["message"].as_str().unwrap().to_string();
+    let r = call(
+        &e.app,
+        Method::POST,
+        "/wallet/verify",
+        &s.hdrs(true),
+        Some(json!({ "challengeId": c.body["challengeId"], "signature": sign(&sk, &msg) })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(bounties::get(&pool, 4).await.unwrap().unwrap().maintainer_github_id, Some(700));
+}
+
 // ================= "my" data =================
 
 #[sqlx::test(migrator = "MIGRATOR")]

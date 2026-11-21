@@ -48,6 +48,16 @@ pub async fn link<'e>(ex: impl PgExecutor<'e>, pr_id: i64, bounty_id: i64) -> Re
         .map(|_| ())
 }
 
+/// Removes the link between a PR and a bounty (the closing reference was dropped before merge). Idempotent.
+pub async fn unlink<'e>(ex: impl PgExecutor<'e>, pr_id: i64, bounty_id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM pull_request_bounties WHERE pr_id = $1 AND bounty_id = $2")
+        .bind(pr_id)
+        .bind(bounty_id)
+        .execute(ex)
+        .await
+        .map(|_| ())
+}
+
 pub async fn for_bounty<'e>(ex: impl PgExecutor<'e>, bounty_id: i64) -> Result<Vec<PullRequest>, sqlx::Error> {
     sqlx::query_as(
         "SELECT p.id, p.number, p.author_github_id, p.author_login, p.head_sha, p.state, p.merged_at, p.diff_hash

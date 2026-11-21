@@ -62,6 +62,38 @@ async fn funding_creates_the_bounty_attributes_it_to_the_requester_and_queues_a_
     assert_eq!(count(&pool, &jobs_of("card.refresh")).await, 1);
 }
 
+// #218: a bounty funded straight on chain (no funding link) takes the maintainer's GitHub id from the
+// account that has linked the maintainer wallet, when one exists.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn an_intentless_funding_resolves_the_maintainer_github_id_from_the_linked_wallet(pool: PgPool) {
+    let w = World::new(pool.clone());
+    tracked_repo(&w).await;
+    let m = addr(1);
+    // the maintainer's wallet is linked to GitHub id 700
+    let u = users::upsert_github(&pool, 700, "maintainer", None, false).await.unwrap();
+    users::set_wallet(&pool, &u.id, &m, Utc::now()).await.unwrap();
+
+    // funded on chain with no matching funding intent
+    w.events.push_page(vec![funded(&fund(4, &m, 3), 100, 1)], &event_id(100, 1), 100);
+    assert_eq!(poll_once(&w.indexer()).await.unwrap().applied, 1);
+
+    let b = bounties::get(&pool, 4).await.unwrap().unwrap();
+    assert_eq!(b.maintainer_github_id, Some(700), "resolved from the wallet link when there is no intent");
+}
+
+// #218: with no funding link AND no linked wallet, the maintainer_github_id stays unset (filled in later).
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn an_intentless_funding_without_a_linked_wallet_leaves_the_github_id_unset(pool: PgPool) {
+    let w = World::new(pool.clone());
+    tracked_repo(&w).await;
+    let m = addr(1);
+    w.events.push_page(vec![funded(&fund(4, &m, 3), 100, 1)], &event_id(100, 1), 100);
+    assert_eq!(poll_once(&w.indexer()).await.unwrap().applied, 1);
+
+    let b = bounties::get(&pool, 4).await.unwrap().unwrap();
+    assert_eq!(b.maintainer_github_id, None, "no intent and no linked wallet: unknown for now");
+}
+
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn replaying_a_page_changes_nothing_and_queues_nothing_more(pool: PgPool) {
     let w = World::new(pool.clone());

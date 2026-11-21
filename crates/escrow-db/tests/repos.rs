@@ -69,6 +69,44 @@ async fn a_wallet_can_belong_to_only_one_account(pool: PgPool) {
     users::set_wallet(&pool, &b.id, "GWALLET", Utc::now()).await.unwrap();
 }
 
+// #218: linking a wallet backfills the maintainer_github_id on bounties that were funded on chain with no
+// funding link (maintainer_github_id NULL). Bounties that already have one are left untouched.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn linking_a_wallet_backfills_bounties_that_had_no_maintainer_github_id(pool: PgPool) {
+    seed_repo(&pool).await;
+    bounties::insert(
+        &pool,
+        &bounties::NewBounty {
+            id: 4,
+            repo_id: 10,
+            issue_number: 3,
+            issue_url: "https://github.com/acme/widgets/issues/3",
+            maintainer: "GWALLET",
+            maintainer_github_id: None,
+            token: "CTOKEN",
+            amount: 50_000_000,
+            fee_bps: 300,
+            deadline: base() + Duration::days(14),
+            relayer_allowed: true,
+            fund_tx: "fundtx",
+            created_at: Utc::now(),
+            last_event_id: "0000000000000004-0000000001",
+        },
+    )
+    .await
+    .unwrap();
+    // a bounty that already has a maintainer_github_id must not be rewritten
+    bounty(&pool, 5, 4, 50_000_000, 14).await;
+
+    let u = users::upsert_github(&pool, 700, "maintainer", None, false).await.unwrap();
+    users::set_wallet(&pool, &u.id, "GWALLET", Utc::now()).await.unwrap();
+    let filled = users::backfill_maintainer_github_id(&pool, &u.id).await.unwrap();
+    assert_eq!(filled, 1, "only the orphaned bounty is backfilled");
+
+    assert_eq!(bounties::get(&pool, 4).await.unwrap().unwrap().maintainer_github_id, Some(700));
+    assert_eq!(bounties::get(&pool, 5).await.unwrap().unwrap().maintainer_github_id, Some(500), "an existing id is kept");
+}
+
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn sessions_expire_and_can_be_revoked(pool: PgPool) {
     let u = users::upsert_github(&pool, 1, "a", None, false).await.unwrap();
