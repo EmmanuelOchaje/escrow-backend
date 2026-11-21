@@ -49,6 +49,10 @@ pub async fn dispatch_webhook(d: &DispatchDeps, event: &str, payload: &Value) ->
             for r in &p.repositories_added {
                 github::upsert_repo(pool, r.id, p.installation.id, &r.full_name, r.private).await?;
             }
+            // Handle repositories_removed: mark them as deleted to prevent bounty creation
+            for r in &p.repositories_removed {
+                github::suspend_repo(pool, r.id).await?;
+            }
             Ok(format!("installation_repositories.{}", p.action))
         }
         "issue_comment" => {
@@ -79,6 +83,11 @@ async fn handle_issues(pool: &sqlx::PgPool, p: &IssuesEvent) -> Result<String, E
         "edited" => {
             let n =
                 bounties::set_issue_data_for_issue(pool, repo_id, number, &p.issue.title, &parse_criteria(p.issue.body.as_deref())).await?;
+            // Refresh bounty cards when issue details are edited so they display latest title/criteria
+            let live = bounties::active_for_issues(pool, repo_id, &[number]).await?;
+            for b in &live {
+                jobs::enqueue_card_refresh(pool, b.id).await?;
+            }
             Ok(format!("issues.edited:{n}"))
         }
         "closed" | "reopened" => {
