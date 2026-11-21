@@ -29,6 +29,10 @@ const DEFAULT_PAUSE_SECS: i64 = 60;
 const ETAG_CACHE_MAX: usize = 1024;
 /// Bound on paginated list calls, so a looping Link header can never spin forever.
 const MAX_LIST_PAGES: usize = 100;
+/// How long a permission answer (write / none / ...) is reused before asking GitHub again.
+const PERMISSION_TTL_SECS: i64 = 60;
+/// (installation, repo, login) -> (permission, expires at): only "ok" answers are cached, never errors
+type PermissionCache = HashMap<(i64, String, String), (String, DateTime<Utc>)>;
 
 static LABEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^bounty: [A-Za-z0-9_ .]{1,40}$").unwrap());
 static FILE_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_./-]{1,300}$").unwrap());
@@ -150,6 +154,8 @@ pub struct GithubClient {
     throttles: Mutex<HashMap<i64, Throttle>>,
     /// installation + path -> (ETag, body) for conditional GETs
     etags: Mutex<HashMap<String, (String, Vec<u8>)>>,
+    /// (installation, repo, login) -> (permission, expires at): only "ok" answers are cached, never errors
+    permissions: Mutex<PermissionCache>,
     now: Box<dyn Fn() -> DateTime<Utc> + Send + Sync>,
 }
 
@@ -167,6 +173,7 @@ impl GithubClient {
             tokens: Mutex::default(),
             throttles: Mutex::default(),
             etags: Mutex::default(),
+            permissions: Mutex::default(),
             now: Box::new(Utc::now),
         })
     }
@@ -355,20 +362,30 @@ impl GithubApi for GithubClient {
         if !LOGIN.is_match(login) {
             return Err(GithubError::Invalid("invalid login".into()));
         }
+        let key = (installation, repo.to_owned(), login.to_owned());
+        let now = (self.now)();
+        if let Some((permission, expires_at)) = self.permissions.lock().await.get(&key)
+            && *expires_at > now
+        {
+            return Ok(permission.clone());
+        }
         let r = self
             .call(installation, reqwest::Method::GET, &format!("/repos/{}/collaborators/{login}/permission", repo_ok(repo)?), None)
             .await?;
-        if r.status().as_u16() == 404 {
-            return Ok("none".into());
-        }
-        if !r.status().is_success() {
+        let permission = if r.status().as_u16() == 404 {
+            "none".into()
+        } else if !r.status().is_success() {
             return Err(GithubError::Status { status: r.status().as_u16(), what: "permission lookup".into() });
-        }
-        #[derive(Deserialize)]
-        struct P {
-            permission: String,
-        }
-        Ok(r.json::<P>().await.map_err(|e| GithubError::Decode(e.to_string()))?.permission)
+        } else {
+            #[derive(Deserialize)]
+            struct P {
+                permission: String,
+            }
+            r.json::<P>().await.map_err(|e| GithubError::Decode(e.to_string()))?.permission
+        };
+        // only an answer GitHub actually gave is worth caching; a failure is never cached
+        self.permissions.lock().await.insert(key, (permission.clone(), now + chrono::Duration::seconds(PERMISSION_TTL_SECS)));
+        Ok(permission)
     }
 
     async fn post_comment(&self, installation: i64, repo: &str, issue: i32, body: &str) -> Result<i64, GithubError> {

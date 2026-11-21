@@ -113,6 +113,26 @@ async fn funding_is_refused_with_a_clear_reason(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
+async fn local_checks_run_before_the_github_permission_call(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    // not a pull request, not closed, no active bounty, token enabled, amount in range -> GitHub is asked
+    assert_eq!(run(&w, "issue_comment", &say("/bounty 50", "stranger")).await.unwrap(), "denied");
+    assert_eq!(w.gh.calls().iter().filter(|c| c.as_str() == "get_permission").count(), 1);
+
+    w.gh.with(|s| s.calls.clear());
+    // a pull request is refused before GitHub is ever asked
+    let on_pr = comment_event("/bounty 50", 500, "stranger", "User", 8, "open", true);
+    assert_eq!(run(&w, "issue_comment", &on_pr).await.unwrap(), "rejected:pr");
+    // a closed issue is refused before GitHub is ever asked
+    let closed = comment_event("/bounty 50", 500, "stranger", "User", 3, "closed", false);
+    assert_eq!(run(&w, "issue_comment", &closed).await.unwrap(), "rejected:closed");
+    // an active bounty blocks funding before GitHub is ever asked
+    seed::bounty(&w.db, &seed::B::new(4, 3)).await;
+    assert_eq!(run(&w, "issue_comment", &say("/bounty 50", "stranger")).await.unwrap(), "rejected:active");
+    assert!(!w.gh.calls().iter().any(|c| c == "get_permission"), "{:?}", w.gh.calls());
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
 async fn a_token_the_deployment_has_not_configured_is_refused(pool: PgPool) {
     let w = world(pool.clone()).await;
     let mut d = w.dispatch(None);

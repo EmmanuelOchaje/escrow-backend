@@ -122,10 +122,6 @@ pub async fn handle_issue_comment(d: &CommandDeps, ev: &IssueCommentEvent) -> Re
             Ok("dispute-requested".into())
         }
         Command::Fund { amount, token, days } => {
-            if !WRITERS.contains(&d.gh.get_permission(inst, repo, login).await?.as_str()) {
-                reply(format!("@{login} only collaborators with write access can fund a bounty.")).await?;
-                return Ok("denied".into());
-            }
             if ev.issue.pull_request.is_some() {
                 reply("Bounties can only be placed on issues, not pull requests.".into()).await?;
                 return Ok("rejected:pr".into());
@@ -150,6 +146,10 @@ pub async fn handle_issue_comment(d: &CommandDeps, ev: &IssueCommentEvent) -> Re
             if days < d.min_days || days > d.max_days {
                 reply(format!("Duration must be between {} and {} days.", d.min_days, d.max_days)).await?;
                 return Ok("rejected:duration".into());
+            }
+            if !WRITERS.contains(&d.gh.get_permission(inst, repo, login).await?.as_str()) {
+                reply(format!("@{login} only collaborators with write access can fund a bounty.")).await?;
+                return Ok("denied".into());
             }
 
             // Store the link first, then announce it, so a link in a comment always exists.

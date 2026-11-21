@@ -52,11 +52,16 @@ pub struct EventMeta<'a> {
 }
 
 /// Applies one event inside the caller's transaction. Idempotent. Returns what happened so the caller
-/// enqueues follow-up work only for `Applied`.
-pub async fn apply_event(conn: &mut PgConnection, ev: &ChainEvent, meta: &EventMeta<'_>) -> Result<Outcome, sqlx::Error> {
-    let id = i64::try_from(ev.bounty_id()).unwrap_or(i64::MAX);
+/// enqueues follow-up work only for `Applied`. A malformed tracked event is a decode error: the page
+/// aborts and nothing is indexed, never something made up.
+pub async fn apply_event(conn: &mut PgConnection, ev: &ChainEvent, meta: &EventMeta<'_>) -> Result<Outcome, EngineError> {
+    let id = i64::try_from(ev.bounty_id()).map_err(|_| {
+        EngineError::Chain(ChainError::Decode(format!("event {}: bounty id {} is out of range", meta.event_id, ev.bounty_id())))
+    })?;
     if let ChainEvent::Funded { repo_id, issue, token, amount, fee_bps, deadline, relayer_allowed, maintainer, .. } = ev {
-        let repo_id = i64::try_from(*repo_id).unwrap_or(0);
+        let repo_id = i64::try_from(*repo_id).map_err(|_| {
+            EngineError::Chain(ChainError::Decode(format!("event {}: repo id {} is out of range", meta.event_id, *repo_id)))
+        })?;
         // anyone can fund any repository on chain; we only track the ones with our App installed
         let Some(repo) = escrow_db::github::get_repo(&mut *conn, repo_id).await? else {
             // Store the untracked funded event so it can be applied later when the repo is installed
@@ -86,7 +91,8 @@ pub async fn apply_event(conn: &mut PgConnection, ev: &ChainEvent, meta: &EventM
                 Outcome::Anomaly
             });
         }
-        let issue_number = i32::try_from(*issue).unwrap_or(0);
+        let issue_number = i32::try_from(*issue)
+            .map_err(|_| EngineError::Chain(ChainError::Decode(format!("event {}: issue {} is out of range", meta.event_id, *issue))))?;
         let intent = intents::find_unused_match(&mut *conn, repo_id, issue_number, token, *amount).await?;
         if let Some(i) = &intent {
             intents::mark_used(&mut *conn, &i.id, meta.closed_at).await?;
@@ -109,8 +115,20 @@ pub async fn apply_event(conn: &mut PgConnection, ev: &ChainEvent, meta: &EventM
                 maintainer_github_id,
                 token,
                 amount: *amount,
-                fee_bps: i32::try_from(*fee_bps).unwrap_or(0),
-                deadline: DateTime::from_timestamp(i64::try_from(*deadline).unwrap_or(0), 0).unwrap_or(meta.closed_at),
+                fee_bps: i32::try_from(*fee_bps).map_err(|_| {
+                    EngineError::Chain(ChainError::Decode(format!("event {}: fee_bps {} is out of range", meta.event_id, *fee_bps)))
+                })?,
+                deadline: {
+                    let ts = i64::try_from(*deadline).map_err(|_| {
+                        EngineError::Chain(ChainError::Decode(format!("event {}: deadline {} is out of range", meta.event_id, *deadline)))
+                    })?;
+                    DateTime::from_timestamp(ts, 0).ok_or_else(|| {
+                        EngineError::Chain(ChainError::Decode(format!(
+                            "event {}: deadline {} is not a valid timestamp",
+                            meta.event_id, *deadline
+                        )))
+                    })?
+                },
                 relayer_allowed: *relayer_allowed,
                 fund_tx: meta.tx_hash,
                 created_at: meta.closed_at,
@@ -216,7 +234,13 @@ pub async fn poll_once(d: &IndexerDeps) -> Result<PollReport, EngineError> {
             let decoded = raw.decode()?;
             ledger = ledger.max(raw.ledger);
             let Some(ev) = decoded else { continue };
-            let closed_at = DateTime::parse_from_rfc3339(&raw.ledger_closed_at).map_or_else(|_| Utc::now(), |t| t.with_timezone(&Utc));
+            let closed_at = match DateTime::parse_from_rfc3339(&raw.ledger_closed_at) {
+                Ok(t) => t.with_timezone(&Utc),
+                Err(e) => {
+                    tracing::warn!(event = %raw.id, value = %raw.ledger_closed_at, error = %e, "ledger_closed_at could not be parsed; falling back to now");
+                    Utc::now()
+                }
+            };
             let meta = EventMeta { event_id: &raw.id, tx_hash: &raw.tx_hash, closed_at };
             match apply_event(&mut tx, &ev, &meta).await? {
                 Outcome::Applied => {

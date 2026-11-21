@@ -294,6 +294,54 @@ async fn permission_lookup_maps_404_to_none_and_rejects_hostile_input() {
 }
 
 #[tokio::test]
+async fn permission_lookups_are_cached_for_a_minute_and_errors_never_are() {
+    let calls = Arc::new(Mutex::new(0u32));
+    let c = calls.clone();
+    let clock = Arc::new(Mutex::new(Utc::now()));
+    let cc = clock.clone();
+    let fake = Fake::start(move |s| {
+        if s.path.ends_with("/access_tokens") {
+            return token_reply("t", *cc.lock().unwrap() + Duration::hours(1));
+        }
+        if s.path.contains("/collaborators/") {
+            *c.lock().unwrap() += 1;
+            let mut segs = s.path.split('/').rev();
+            segs.next(); // "permission"
+            match segs.next().unwrap_or("") {
+                "alice" => (200, json!({ "permission": "write" })),
+                "carol" => (404, json!({})),
+                "down" => (500, json!({})),
+                _ => (404, json!({})),
+            }
+        } else {
+            (404, json!({}))
+        }
+    })
+    .await;
+    let client_clock = clock.clone();
+    let client = fake.client().with_clock(move || *client_clock.lock().unwrap());
+
+    assert_eq!(client.get_permission(1, "acme/widgets", "alice").await.unwrap(), "write");
+    assert_eq!(client.get_permission(1, "acme/widgets", "alice").await.unwrap(), "write");
+    assert_eq!(*calls.lock().unwrap(), 1, "two lookups within the TTL cost one API call");
+
+    // a different login is looked up separately
+    assert_eq!(client.get_permission(1, "acme/widgets", "carol").await.unwrap(), "none");
+    assert_eq!(*calls.lock().unwrap(), 2);
+
+    // errors are not cached: every failing lookup hits the network again
+    for _ in 0..2 {
+        assert!(client.get_permission(1, "acme/widgets", "down").await.is_err());
+    }
+    assert_eq!(*calls.lock().unwrap(), 4);
+
+    // past the TTL the answer is refreshed
+    *clock.lock().unwrap() = Utc::now() + chrono::Duration::seconds(61);
+    assert_eq!(client.get_permission(1, "acme/widgets", "alice").await.unwrap(), "write");
+    assert_eq!(*calls.lock().unwrap(), 5);
+}
+
+#[tokio::test]
 async fn comments_are_posted_and_edited() {
     let fake = Fake::start(|s| {
         if s.path.ends_with("/access_tokens") {

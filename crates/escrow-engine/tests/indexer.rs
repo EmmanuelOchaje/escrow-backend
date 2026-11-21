@@ -454,3 +454,39 @@ async fn consecutive_failures_trigger_alert_and_back_off(pool: PgPool) {
     // The test passing without hanging shows backoff works
     // In a real test we'd check logs, but here we verify the loop doesn't spin tight
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn out_of_range_event_fields_abort_the_page_instead_of_indexing_made_up_values(pool: PgPool) {
+    let w = World::new(pool.clone());
+    tracked_repo(&w).await;
+    let m = addr(1);
+
+    // a repo id that does not fit in i64 is malformed: the page aborts and nothing is stored
+    w.events.push_page(vec![funded_with(&fund(4, &m, 3), u64::MAX, 1_795_000_000, 100, 1)], &event_id(100, 1), 100);
+    assert!(poll_once(&w.indexer()).await.is_err(), "an out-of-range repo id is a decode error");
+    assert!(bounties::get(&pool, 4).await.unwrap().is_none());
+    assert!(webhooks::get_cursor(&pool, CURSOR_ID).await.unwrap().is_none(), "the cursor stays put so the bad event is retried");
+
+    // a deadline that fits in i64 but is not a valid timestamp is malformed too
+    w.events.push_page(
+        vec![funded_with(&fund(5, &m, 4), REPO_ID as u64, u64::try_from(i64::MAX).unwrap(), 100, 2)],
+        &event_id(100, 2),
+        100,
+    );
+    assert!(poll_once(&w.indexer()).await.is_err(), "an invalid deadline is a decode error");
+    assert!(bounties::get(&pool, 5).await.unwrap().is_none());
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn an_unparseable_ledger_closed_at_is_stamped_with_now_instead_of_silently_rewritten(pool: PgPool) {
+    let w = World::new(pool.clone());
+    tracked_repo(&w).await;
+    let m = addr(1);
+    let mut ev = funded(&fund(4, &m, 3), 100, 1);
+    ev.ledger_closed_at = "not a timestamp".into();
+    w.events.push_page(vec![ev], &event_id(100, 1), 100);
+    let r = poll_once(&w.indexer()).await.unwrap();
+    assert_eq!((r.events_seen, r.applied), (1, 1));
+    let b = bounties::get(&pool, 4).await.unwrap().unwrap();
+    assert!(b.created_at > Utc::now() - Duration::seconds(60), "the fallback stamp is the current time: {:?}", b.created_at);
+}
