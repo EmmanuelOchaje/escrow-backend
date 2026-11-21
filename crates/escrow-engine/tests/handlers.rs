@@ -380,6 +380,70 @@ async fn bot_prs_are_ignored(pool: PgPool) {
     assert_eq!(run(&w, "pull_request", &ev).await.unwrap(), "pull_request:0");
 }
 
+// #216: an author who drops the closing reference before merge is unlinked from that bounty.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn dropping_the_closing_reference_unlinks_the_pr_from_the_bounty(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    fund_bounty(&w, 4, 3).await;
+    assert_eq!(
+        run(&w, "pull_request", &pr_event("opened", 7, 100, 900, "Closes #3", false, false, "open")).await.unwrap(),
+        "pull_request:1"
+    );
+    assert_eq!(prs::for_bounty(&pool, 4).await.unwrap().len(), 1);
+
+    // the author edits the body to drop "Closes #3": the link is removed
+    let mut drop = pr_event("edited", 7, 100, 900, "WIP, not ready", false, false, "open");
+    drop["changes"] = json!({ "body": { "from": "Closes #3" } });
+    assert_eq!(run(&w, "pull_request", &drop).await.unwrap(), "pull_request:0");
+    assert!(prs::for_bounty(&pool, 4).await.unwrap().is_empty(), "the stale link is gone");
+
+    // re-adding the reference links it again
+    let mut readd = pr_event("edited", 7, 100, 900, "Closes #3 after all", false, false, "open");
+    readd["changes"] = json!({ "body": { "from": "WIP, not ready" } });
+    assert_eq!(run(&w, "pull_request", &readd).await.unwrap(), "pull_request:1");
+    assert_eq!(prs::for_bounty(&pool, 4).await.unwrap().len(), 1);
+}
+
+// #216: a merged PR's links are frozen — a later edit that drops the reference changes nothing.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn a_merged_prs_links_are_never_removed(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    fund_bounty(&w, 4, 3).await;
+    seed::user(&w.db, 900, "dev", Some("GCONTRIBUTOR")).await;
+    run(&w, "pull_request", &pr_event("closed", 7, 100, 900, "Closes #3", true, false, "closed")).await.unwrap();
+    assert_eq!(prs::for_bounty(&pool, 4).await.unwrap().len(), 1);
+
+    // a late edited event that no longer references the issue must not unlink a merged PR
+    let mut edit = pr_event("edited", 7, 100, 900, "no reference now", false, false, "closed");
+    edit["changes"] = json!({ "body": { "from": "Closes #3" } });
+    assert_eq!(run(&w, "pull_request", &edit).await.unwrap(), "pull_request:0");
+    assert_eq!(prs::for_bounty(&pool, 4).await.unwrap().len(), 1, "a merged PR's links stay frozen");
+}
+
+// #217: a title-only edit changes neither body nor base, so it must not schedule a review.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn a_title_only_edit_does_not_schedule_a_review_but_a_body_edit_does(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    fund_bounty(&w, 4, 3).await;
+    let sched = Arc::new(Scheduler::default());
+    let d = w.dispatch(Some(sched.clone()));
+
+    let mut title_only = pr_event("edited", 7, 100, 900, "Closes #3", false, false, "open");
+    title_only["changes"] = json!({ "title": { "from": "Old title" } });
+    assert_eq!(dispatch_webhook(&d, "pull_request", &title_only).await.unwrap(), "pull_request:1");
+    assert!(sched.0.lock().unwrap().is_empty(), "a retitle costs no model call");
+
+    let mut body_edit = pr_event("edited", 7, 100, 900, "Closes #3", false, false, "open");
+    body_edit["changes"] = json!({ "body": { "from": "Closes #3 (typo)" } });
+    assert_eq!(dispatch_webhook(&d, "pull_request", &body_edit).await.unwrap(), "pull_request:1");
+    assert_eq!(sched.0.lock().unwrap().len(), 1, "a body edit schedules a review");
+
+    let mut base_edit = pr_event("edited", 7, 100, 900, "Closes #3", false, false, "open");
+    base_edit["changes"] = json!({ "base": { "from": "main" } });
+    dispatch_webhook(&d, "pull_request", &base_edit).await.unwrap();
+    assert_eq!(sched.0.lock().unwrap().len(), 2, "a base change schedules a review");
+}
+
 // ---------------- installations and issues ----------------
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -422,6 +486,47 @@ async fn editing_an_issue_refreshes_the_live_bounties_title_and_criteria(pool: P
     assert_eq!(run(&w, "issues", &ev5).await.unwrap(), "issues.edited:0", "a paid bounty's record is not rewritten");
     let opened = json!({ "action": "opened", "repository": { "id": 1 }, "issue": { "number": 3, "title": "t" } });
     assert_eq!(run(&w, "issues", &opened).await.unwrap(), "ignored");
+}
+
+// #215: closing or reopening an issue refreshes the card of any live bounty on it.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn closing_and_reopening_an_issue_refresh_the_live_bountys_card(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    fund_bounty(&w, 4, 3).await;
+    let closed = json!({ "action": "closed", "repository": { "id": seed::REPO_ID }, "issue": { "number": 3, "state": "closed" } });
+    assert_eq!(run(&w, "issues", &closed).await.unwrap(), "issues.closed:1");
+    let count = |kind: &str| {
+        let pool = pool.clone();
+        let kind = kind.to_string();
+        async move {
+            sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
+                "SELECT count(*) FROM jobs WHERE kind = '{kind}' AND status = 'queued'"
+            )))
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(count("card.refresh").await, 1, "a card refresh was queued for bounty 4");
+
+    let reopened = json!({ "action": "reopened", "repository": { "id": seed::REPO_ID }, "issue": { "number": 3, "state": "open" } });
+    assert_eq!(run(&w, "issues", &reopened).await.unwrap(), "issues.reopened:1");
+    assert_eq!(count("card.refresh").await, 1, "the refresh collapses into one queued job per bounty");
+}
+
+// #215: transferring or deleting an issue with a live bounty records an operator alert per bounty.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn transferring_or_deleting_an_issue_raises_an_operator_alert(pool: PgPool) {
+    let w = world(pool.clone()).await;
+    fund_bounty(&w, 4, 3).await;
+    for (action, audit_action) in [("transferred", "issue.transferred.alert"), ("deleted", "issue.deleted.alert")] {
+        let ev = json!({ "action": action, "repository": { "id": seed::REPO_ID }, "issue": { "number": 3 } });
+        assert_eq!(run(&w, "issues", &ev).await.unwrap(), format!("issues.{action}:1"));
+        assert!(audit::exists(&pool, audit_action, "bounty:4").await.unwrap(), "{action} records an operator alert for bounty 4");
+    }
+    // an issue with no live bounty raises nothing
+    let quiet = json!({ "action": "deleted", "repository": { "id": seed::REPO_ID }, "issue": { "number": 99 } });
+    assert_eq!(run(&w, "issues", &quiet).await.unwrap(), "issues.deleted:0");
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]

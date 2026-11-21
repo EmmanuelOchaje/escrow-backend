@@ -25,18 +25,31 @@ pub async fn handle_pull_request(d: &PullDeps, ev: &PullRequestEvent) -> Result<
     if pr.user.kind == "Bot" {
         return Ok(vec![]);
     }
-    let issues: Vec<i32> =
-        parse_closing_refs(pr.body.as_deref(), &repo_name(ev)).into_iter().filter_map(|n| i32::try_from(n).ok()).collect();
-    if issues.is_empty() {
+    // Once merged the record is frozen: never relink, unlink or re-review it.
+    if prs::get(&d.db.pool, pr.id).await?.is_some_and(|p| p.state == "merged") {
         return Ok(vec![]);
     }
-    let live = bounties::active_for_issues(&d.db.pool, ev.repository.id, &issues).await?;
+    let repo_id = ev.repository.id;
+    let issues: Vec<i32> =
+        parse_closing_refs(pr.body.as_deref(), &repo_name(ev)).into_iter().filter_map(|n| i32::try_from(n).ok()).collect();
+
+    // Drop links whose closing reference is gone. Only while the PR is unmerged, and only on the events
+    // that can change what it closes (an edit to the body, or a synchronize that may rewrite it). A merged
+    // PR's links are frozen (handled above); other actions never remove a still-pending submission. Only
+    // live bounties are considered, so a link to an already-resolved bounty is left as history.
+    if !pr.merged && matches!(ev.action.as_str(), "edited" | "synchronize") {
+        let referenced: std::collections::HashSet<i32> = issues.iter().copied().collect();
+        for b in prs::live_bounties(&d.db.pool, pr.id).await? {
+            if b.repo_id == repo_id && !referenced.contains(&b.issue_number) {
+                prs::unlink(&d.db.pool, pr.id, b.id).await?;
+            }
+        }
+    }
+
+    let live = bounties::active_for_issues(&d.db.pool, repo_id, &issues).await?;
     let eligible: Vec<_> = live.into_iter().filter(|b| b.maintainer_github_id != Some(pr.user.id)).collect();
     if eligible.is_empty() {
         return Ok(vec![]);
-    }
-    if prs::get(&d.db.pool, pr.id).await?.is_some_and(|p| p.state == "merged") {
-        return Ok(vec![]); // once merged, the record is frozen
     }
     let state = if pr.merged {
         "merged"
@@ -69,6 +82,7 @@ pub async fn handle_pull_request(d: &PullDeps, ev: &PullRequestEvent) -> Result<
         && state == "open"
         && !pr.draft
         && REVIEW_ACTIONS.contains(&ev.action.as_str())
+        && (ev.action != "edited" || ev.changes.as_ref().is_some_and(|c| c.affects_review()))
         && let Some(r) = &d.reviews
         && github::ai_reviews_enabled(&d.db.pool, ev.repository.id).await?
     {
