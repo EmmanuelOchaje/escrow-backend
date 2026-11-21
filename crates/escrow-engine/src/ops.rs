@@ -103,6 +103,19 @@ pub async fn collect_alerts(db: &Db, a: &AlertInputs) -> Result<Vec<Alert>, sqlx
     if anomaly_count > 0 {
         let word = if anomaly_count == 1 { "anomaly" } else { "anomalies" };
         out.push(Alert::new("indexer_anomalies", format!("{anomaly_count} indexer {word} in the last 24h")));
+    // Bounties whose issue was transferred or deleted out from under them: recorded as `issue.*.alert`
+    // audit entries by the webhook, surfaced here while the bounty is still live so it is not forgotten.
+    let orphaned: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT b.id, a.action FROM bounties b
+         JOIN audit_log a ON a.target = 'bounty:' || b.id
+         WHERE b.status IN ('OPEN','DISPUTED') AND a.action IN ('issue.transferred.alert','issue.deleted.alert')
+         ORDER BY b.id",
+    )
+    .fetch_all(&db.pool)
+    .await?;
+    for (id, action) in orphaned {
+        let what = if action.starts_with("issue.deleted") { "deleted" } else { "transferred" };
+        out.push(Alert::new(format!("bounty_orphaned:{id}"), format!("Bounty {id} is still active but its issue was {what}")));
     }
     Ok(out)
 }

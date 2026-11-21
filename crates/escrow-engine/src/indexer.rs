@@ -91,6 +91,13 @@ pub async fn apply_event(conn: &mut PgConnection, ev: &ChainEvent, meta: &EventM
         if let Some(i) = &intent {
             intents::mark_used(&mut *conn, &i.id, meta.closed_at).await?;
         }
+        // With a funding link the maintainer is whoever requested it. Funded straight on chain there is no
+        // intent, so fall back to the account that has linked the maintainer wallet (it may still be unset,
+        // and is backfilled by `bounties::backfill_maintainer_github_id` when that wallet is later linked).
+        let maintainer_github_id = match &intent {
+            Some(i) => Some(i.requested_by),
+            None => users::by_wallet(&mut *conn, maintainer).await?.map(|u| u.github_id),
+        };
         bounties::insert(
             &mut *conn,
             &bounties::NewBounty {
@@ -99,7 +106,7 @@ pub async fn apply_event(conn: &mut PgConnection, ev: &ChainEvent, meta: &EventM
                 issue_number,
                 issue_url: &format!("https://github.com/{}/issues/{issue_number}", repo.full_name),
                 maintainer,
-                maintainer_github_id: intent.map(|i| i.requested_by),
+                maintainer_github_id,
                 token,
                 amount: *amount,
                 fee_bps: i32::try_from(*fee_bps).unwrap_or(0),

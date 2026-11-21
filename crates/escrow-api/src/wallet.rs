@@ -63,6 +63,9 @@ pub async fn verify_challenge(db: &Db, user_id: &str, challenge_id: &str, signat
         Err(e) if is_unique_violation(&e) => return Err(ApiError::conflict("address_taken", "address already linked to another account")),
         Err(e) => return Err(e.into()),
     }
+    // bounties this account funded straight on chain had no maintainer GitHub id; now that the wallet is
+    // linked we can attribute them, so the maintainer can open disputes and their own PRs are filtered out
+    users::backfill_maintainer_github_id(&mut *tx, user_id).await?;
     tx.commit().await?;
     Ok(c.address)
 }
